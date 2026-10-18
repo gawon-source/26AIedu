@@ -215,11 +215,34 @@ def load_class_definitions(cls):
 
 
 def reset_class(cls):
-    conn = db_conn()
-    conn.execute("DELETE FROM records WHERE cls=?", (cls,))
-    conn.execute("DELETE FROM definitions WHERE cls=?", (cls,))
-    conn.commit()
-    conn.close()
+    """해당 반의 기록과 정의를 삭제한다. 표/열이 없어도 오류를 내지 않는다."""
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    try:
+        deleted = 0
+        for table in ("records", "definitions"):
+            found = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone()
+            if not found:
+                continue
+
+            cols = [row[1] for row in conn.execute(f"PRAGMA table_info({table})")]
+            key = None
+            for cand in ("cls", "class_name", "cls_name", "ban", "classroom"):
+                if cand in cols:
+                    key = cand
+                    break
+            if key is None:
+                continue
+
+            cur = conn.execute(f"DELETE FROM {table} WHERE {key}=?", (str(cls),))
+            deleted += cur.rowcount
+        conn.commit()
+        return deleted
+    finally:
+        conn.close()
+
 
 
 # =====================================================================
@@ -375,7 +398,7 @@ with st.sidebar:
     st.markdown("### 🕵️ DETECTIVE ID")
     st.caption("수사증을 발급받아야 입장할 수 있다.")
     cls = st.selectbox("소속 (반)", CLASS_OPTIONS, key="sb_cls")
-    num = st.selectbox("요원 번호", NUM_OPTIONS, key="sb_num")
+    num = st.selectbox("번호", NUM_OPTIONS, key="sb_num")
     name = st.text_input("탐정 이름", max_chars=12, placeholder="예) 김민준",
                          key="sb_name").strip()
 
@@ -395,9 +418,10 @@ with st.sidebar:
         if pin == TEACHER_PIN:
             st.caption("인증되었다.")
             target = st.selectbox("초기화할 반", CLASS_OPTIONS, key="sb_reset_cls")
-            if st.button("이 반 기록 전체 삭제", key="btn_reset"):
-                reset_class(target)
-                st.success(f"{target} 기록을 삭제했다.")
+            if st.button("이 반 기록 초기화"):
+               n = reset_class(target)
+               st.success(f"{target} 기록 {n}건을 삭제했다.")
+               st.rerun()
         elif pin:
             st.error("PIN이 올바르지 않다.")
 
