@@ -10,6 +10,21 @@ import datetime
 import pandas as pd
 import streamlit as st
 
+# ── 페이지 목록 정의 (ss를 사용하지 않음) ───────────────────
+PAGES = ["사건 브리핑", "수사실 (20건)", "내 수사 보고서", "상황실 (반 전체)", "AI 특성 사전"]
+
+def _safe_page(value):
+    """목록에 없는 값이 들어와도 가장 비슷한 페이지로 보정한다."""
+    if value in PAGES:
+        return value
+    if isinstance(value, str) and value.strip():
+        key = value.split("(")[0].strip()
+        for p in PAGES:
+            if key and key in p:
+                return p
+    return PAGES[0]
+
+
 # ----------------------------------------------------------------------------
 # 기본 설정
 # ----------------------------------------------------------------------------
