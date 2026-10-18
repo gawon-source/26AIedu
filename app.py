@@ -1,709 +1,708 @@
 # -*- coding: utf-8 -*-
 """
-AI 탐정소 (AI Detective Agency)
-- 수업: "AI를 찾아라 - AI는 사람의 어떤 능력을 흉내 내는가?"
-- 활동: 생활 속 사례 20장을 'AI다/아니다'로 판정 -> AI 특성 4종(인식/학습/추론/행동) 태깅
-- 산출물: 개인 점수 기록, 내가 쓴 AI 정의 1문장, 반 전체 정답률 실시간 집계
-실행:  streamlit run app.py
+AI 탐정소 | CASE FILE 4-1-1  "AI를 찾아라"
+정보 4-1. 인공지능의 개념과 특성 - 중학교 1학년용 수업 앱
+실행: streamlit run app.py
 """
-
+import os
 import sqlite3
-from datetime import datetime
-from pathlib import Path
-
+import datetime
 import pandas as pd
 import streamlit as st
 
 # ----------------------------------------------------------------------------
 # 기본 설정
 # ----------------------------------------------------------------------------
-st.set_page_config(page_title="AI 탐정소", page_icon="🕵️", layout="wide")
+st.set_page_config(page_title="AI 탐정소 | CASE 4-1-1", page_icon="🕵️", layout="wide")
 
-DB_PATH = Path(__file__).parent / "ai_detective.db"
-TEACHER_PIN = "1234"          # 선생님 모드 비밀번호 (수업 전에 바꿔 주세요)
-JUDGE_POINT = 10              # 판정 점수
-TAG_POINT = 10                # 태깅 점수(만점)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "ai_detective.db")
 
-TRAITS = {
-    "인식": {"emoji": "👀", "short": "보고 · 듣고 알아차리기",
-             "ex": "카메라·마이크·센서로 바깥 세상의 정보를 받아들여요."},
-    "학습": {"emoji": "📚", "short": "데이터로 스스로 배우기",
-             "ex": "수많은 예시(데이터)를 보면서 규칙을 스스로 찾아내요."},
-    "추론": {"emoji": "🧠", "short": "생각해서 판단하기",
-             "ex": "배운 것을 바탕으로 '이건 ○○일 거야!' 하고 결론을 내려요."},
-    "행동": {"emoji": "🦾", "short": "스스로 실행하기",
-             "ex": "판단한 결과대로 움직이거나 결과물을 만들어 내요."},
-}
-TRAIT_KEYS = list(TRAITS.keys())
+TEACHER_PIN = "1234"          # ★ 수업 전에 반드시 변경하세요
+JUDGE_POINT = 10              # AI 여부 판정 배점
+TAG_POINT = 10                # 특성 태깅 배점
+CLASS_LIST = [f"{i}반" for i in range(1, 11)]
+NUM_LIST = [f"{i}번" for i in range(1, 36)]
+
+TAGS = ["인식", "학습", "추론", "행동"]
+TAG_NONE = "해당 없음 (정해진 규칙대로만 작동)"
+TAG_OPTIONS = [
+    "인식 - 보고/듣고 알아차린다",
+    "학습 - 데이터로 스스로 똑똑해진다",
+    "추론 - 모아둔 지식으로 판단한다",
+    "행동 - 판단한 대로 움직인다",
+    TAG_NONE,
+]
+TAG_KEY = {TAG_OPTIONS[0]: "인식", TAG_OPTIONS[1]: "학습",
+           TAG_OPTIONS[2]: "추론", TAG_OPTIONS[3]: "행동",
+           TAG_OPTIONS[4]: "없음"}
 
 # ----------------------------------------------------------------------------
-# 사건 파일 20장
+# 사건 파일 20장 (정답은 각 사건마다 '단 하나'  -> 중복 정답 없음)
 # ----------------------------------------------------------------------------
 CASES = [
-    dict(id=1, emoji="📺", title="유튜브 추천 영상",
-         desc="어제 축구 영상을 봤더니, 오늘 첫 화면이 축구 영상으로 가득 찼다.",
-         is_ai=True, tags=["인식", "학습", "추론", "행동"],
-         why="내가 본 영상 기록을 인식하고, 수많은 사람의 시청 데이터로 학습해서, "
-             "'이 친구는 축구를 좋아할 것'이라고 추론한 뒤, 추천 목록을 직접 띄우는 행동까지 해요."),
-    dict(id=2, emoji="🚪", title="편의점 자동문",
-         desc="문 앞에 서면 센서가 나를 감지해서 문이 스르륵 열린다.",
-         is_ai=False, tags=["인식", "행동"],
-         why="사람이 있는지 인식하고 문을 여는 행동은 하지만, 배우지도(학습) 판단하지도(추론) 않아요. "
-             "'움직이면 열어라'는 정해진 규칙 하나만 반복하는 기계예요."),
-    dict(id=3, emoji="🤳", title="얼굴로 잠금 해제되는 스마트폰",
-         desc="화면을 쳐다보기만 하면 내 얼굴을 알아보고 잠금이 풀린다.",
-         is_ai=True, tags=["인식", "학습", "추론", "행동"],
-         why="카메라로 얼굴을 인식하고, 내 얼굴 사진을 여러 장 학습해 두었다가, "
-             "'주인이 맞다'고 추론해서 잠금을 푸는 행동을 해요."),
-    dict(id=4, emoji="🧮", title="계산기",
-         desc="7 × 8을 누르면 언제나 똑같이 56이 나온다.",
-         is_ai=False, tags=[],
-         why="사람이 만든 계산 규칙을 그대로 따를 뿐이에요. 스스로 배우거나(학습) "
-             "상황을 보고 판단하는(추론) 일이 전혀 없어요. 아무리 많이 써도 더 똑똑해지지 않죠."),
-    dict(id=5, emoji="🔊", title="AI 스피커",
-         desc="\"불 꺼 줘\"라고 말하면 알아듣고 방 전등을 끈다.",
-         is_ai=True, tags=["인식", "학습", "추론", "행동"],
-         why="마이크로 목소리를 인식하고, 엄청난 양의 말소리를 학습해서, "
-             "무슨 뜻인지 추론한 다음 전등을 끄는 행동을 해요."),
-    dict(id=6, emoji="🚦", title="횡단보도 신호등",
-         desc="30초마다 빨간불과 초록불이 정확히 번갈아 바뀐다.",
-         is_ai=False, tags=[],
-         why="정해진 시간표대로만 바뀌어요. 길에 사람이 많은지 적은지 보지도 않고, 배우지도 않습니다. "
-             "(※ 차량 수를 인식해 스스로 시간을 바꾸는 'AI 신호등'은 AI예요!)"),
-    dict(id=7, emoji="🌐", title="번역 앱",
-         desc="영어 문장을 사진으로 찍으면 자연스러운 한국어로 바꿔 준다.",
-         is_ai=True, tags=["인식", "학습", "추론"],
-         why="글자를 인식하고, 수억 개의 번역 예시를 학습해서, 문맥에 맞는 뜻을 추론해요. "
-             "스스로 움직이는 몸은 없으니 행동은 빼는 게 좋아요."),
-    dict(id=8, emoji="💡", title="밤에 켜지는 가로등",
-         desc="해가 져서 어두워지면 가로등이 저절로 켜진다.",
-         is_ai=False, tags=["인식", "행동"],
-         why="밝기를 인식하고 불을 켜는 행동을 하지만, '어두우면 켜라'는 한 가지 규칙만 따릅니다. "
-             "어제보다 더 똑똑해지는 일은 없어요."),
-    dict(id=9, emoji="🚌", title="자율주행 셔틀버스",
-         desc="운전기사 없이 신호와 사람을 피해 스스로 달린다.",
-         is_ai=True, tags=["인식", "학습", "추론", "행동"],
-         why="카메라·센서로 길을 인식하고, 수많은 운전 데이터를 학습하고, "
-             "'지금 멈춰야 한다'고 추론해서 브레이크를 밟는 행동까지 모두 해요. AI의 대표 선수!"),
-    dict(id=10, emoji="⏰", title="알람 시계",
-         desc="7시로 맞춰 두면 매일 아침 7시에 정확히 울린다.",
-         is_ai=False, tags=[],
-         why="사람이 정해 준 시각에 울리는 것뿐이에요. 내가 늦잠을 자든 말든 배우지 않고 판단하지 않습니다."),
-    dict(id=11, emoji="📧", title="스팸 메일 자동 분류",
-         desc="광고 메일이 알아서 '스팸함'으로 쏙 들어가 있다.",
-         is_ai=True, tags=["인식", "학습", "추론", "행동"],
-         why="메일 내용을 인식하고, 과거의 스팸 메일들을 학습해서, "
-             "'이건 광고다'라고 추론한 뒤 스팸함으로 옮기는 행동을 해요."),
-    dict(id=12, emoji="❄️", title="설정 온도를 지키는 에어컨",
-         desc="24도로 맞춰 두면 24도가 되면 멈추고, 더워지면 다시 돌아간다.",
-         is_ai=False, tags=["인식", "행동"],
-         why="온도를 인식하고 바람을 켜고 끄는 행동을 하지만, '24도보다 높으면 켜라'는 규칙만 반복해요. "
-             "내 생활 습관을 배우는 학습은 없습니다."),
-    dict(id=13, emoji="🐶", title="사진 앱의 자동 앨범",
-         desc="갤러리가 내 강아지 사진만 모아 '멍멍이' 앨범을 만들어 줬다.",
-         is_ai=True, tags=["인식", "학습", "추론"],
-         why="사진을 인식하고, 강아지 이미지를 잔뜩 학습해서, '같은 강아지다'라고 추론해 묶어 줘요."),
-    dict(id=14, emoji="🧺", title="세탁기 '표준 코스'",
-         desc="버튼을 누르면 늘 같은 순서로 빨고, 헹구고, 탈수한다.",
-         is_ai=False, tags=[],
-         why="정해진 순서(프로그램)를 그대로 따라 할 뿐이에요. 빨랫감을 보고 판단하지 않아요. "
-             "(※ 옷의 무게와 오염도를 인식해 코스를 스스로 바꾸는 'AI 세탁기'는 또 달라요!)"),
-    dict(id=15, emoji="💬", title="쇼핑몰 상담 챗봇",
-         desc="\"환불하고 싶어요\"라고 쓰면 상황에 맞는 안내를 바로 보내 준다.",
-         is_ai=True, tags=["인식", "학습", "추론", "행동"],
-         why="내가 쓴 문장을 인식하고, 수많은 상담 기록을 학습해서, "
-             "무엇을 원하는지 추론한 다음 답장을 보내는 행동을 해요."),
-    dict(id=16, emoji="🧴", title="자동 손 소독기",
-         desc="손을 내밀면 센서가 감지해서 소독액이 뿌려진다.",
-         is_ai=False, tags=["인식", "행동"],
-         why="손을 인식하고 분사하는 행동만 해요. 어제보다 더 나은 소독 방법을 배우지는 않죠."),
-    dict(id=17, emoji="⚽", title="축구 오프사이드 AI 판독",
-         desc="선수들의 몸 위치를 추적해 오프사이드인지 자동으로 알려 준다.",
-         is_ai=True, tags=["인식", "학습", "추론"],
-         why="여러 대의 카메라로 몸의 관절을 인식하고, 수많은 경기 영상을 학습해서, "
-             "오프사이드 여부를 추론해요. 최종 선언은 심판이 하니 행동은 빼도 좋아요."),
-    dict(id=18, emoji="🤖", title="집 구조를 기억하는 로봇청소기",
-         desc="청소할수록 길을 익혀서 소파 다리를 안 부딪히고 빠르게 돈다.",
-         is_ai=True, tags=["인식", "학습", "추론", "행동"],
-         why="장애물을 인식하고, 청소할수록 집 지도를 학습하고, 최적 경로를 추론해서, "
-             "스스로 돌아다니는 행동을 해요. '쓸수록 똑똑해진다'가 핵심 단서!"),
-    dict(id=19, emoji="📝", title="영상 자동 자막",
-         desc="말하는 목소리를 알아듣고 실시간으로 글자 자막을 만들어 준다.",
-         is_ai=True, tags=["인식", "학습", "추론"],
-         why="소리를 인식하고, 엄청난 양의 음성과 글자 짝을 학습해서, "
-             "어떤 단어인지 추론해 글자로 적어 줘요."),
-    dict(id=20, emoji="🎨", title="AI 그림 생성",
-         desc="\"우주를 걷는 고양이\"라고 쓰면 세상에 없던 그림을 그려 준다.",
-         is_ai=True, tags=["인식", "학습", "추론", "행동"],
-         why="내가 쓴 글을 인식하고, 수억 장의 그림을 학습해서, 어떤 모양일지 추론한 뒤 "
-             "새 그림을 만들어 내는 행동을 해요."),
+    dict(no=1,  title="사라진 잠금화면",
+         scene="휴대폰을 얼굴 쪽으로 들자 화면이 스스로 열렸다. 쌍둥이 동생 얼굴에는 열리지 않는다.",
+         is_ai=True, tag="인식",
+         why="카메라로 들어온 얼굴 사진 속 특징을 '알아차려서' 내 얼굴인지 구별합니다. 가장 두드러진 특성은 인식입니다."),
+    dict(no=2,  title="말을 알아듣는 스피커",
+         scene="\"오늘 날씨 어때?\"라고 말했더니 스피커가 \"서울은 맑고 18도입니다\"라고 답했다.",
+         is_ai=True, tag="인식",
+         why="사람의 목소리(소리 데이터)를 받아들여 무슨 말인지 알아내는 일이 핵심입니다. 가장 두드러진 특성은 인식입니다."),
+    dict(no=3,  title="저절로 묶인 앨범",
+         scene="사진첩이 수백 장의 사진을 '엄마', '강아지', '친구'처럼 사람별로 묶어 놓았다.",
+         is_ai=True, tag="인식",
+         why="사진 속 얼굴을 보고 누구인지 알아차리는 것이 중심 작업입니다. 가장 두드러진 특성은 인식입니다."),
+    dict(no=4,  title="끝나지 않는 추천 영상",
+         scene="축구 영상 하나를 봤더니, 다음 날부터 첫 화면이 온통 축구 영상으로 바뀌었다.",
+         is_ai=True, tag="학습",
+         why="내가 본 기록(데이터)이 쌓일수록 추천이 달라집니다. 경험으로 좋아지는 것이 핵심이므로 학습입니다."),
+    dict(no=5,  title="내 말투를 외운 키보드",
+         scene="메시지를 쓸 때마다 내가 자주 쓰는 단어가 먼저 뜬다. 쓸수록 더 잘 맞춘다.",
+         is_ai=True, tag="학습",
+         why="'쓸수록 더 정확해진다'는 점이 결정적 단서입니다. 가장 두드러진 특성은 학습입니다."),
+    dict(no=6,  title="걸러진 수상한 메일",
+         scene="광고 메일을 스팸으로 신고할수록, 비슷한 메일이 알아서 스팸함으로 들어간다.",
+         is_ai=True, tag="학습",
+         why="사람이 알려준 예시가 많아질수록 분류 실력이 늘어납니다. 가장 두드러진 특성은 학습입니다."),
+    dict(no=7,  title="바둑판의 낯선 한 수",
+         scene="컴퓨터가 사람 고수도 생각하지 못한 자리에 돌을 놓아 결국 이겼다.",
+         is_ai=True, tag="추론",
+         why="수십 수 뒤까지 따져보고 가장 유리한 선택을 '판단'했습니다. 가장 두드러진 특성은 추론입니다."),
+    dict(no=8,  title="엑스레이 속 작은 그림자",
+         scene="엑스레이 사진을 분석해 \"이 부분이 의심스럽습니다(92%)\"라고 의사에게 알려 주었다.",
+         is_ai=True, tag="추론",
+         why="배운 지식을 근거로 가능성을 따져 결론을 내립니다. 가장 두드러진 특성은 추론입니다."),
+    dict(no=9,  title="처음 보는 문장을 쓰는 상담원",
+         scene="챗봇에게 길게 질문했더니, 어디에도 똑같이 적혀 있지 않은 새로운 답변을 만들어 주었다.",
+         is_ai=True, tag="추론",
+         why="정해진 답을 꺼내 오는 게 아니라, 아는 것을 엮어 새 답을 만들어 냅니다. 가장 두드러진 특성은 추론입니다."),
+    dict(no=10, title="운전자 없는 차",
+         scene="차가 스스로 차선을 지키고, 갑자기 뛰어든 사람 앞에서 브레이크를 밟았다.",
+         is_ai=True, tag="행동",
+         why="판단한 결과를 실제 조작(핸들·브레이크)으로 옮깁니다. 가장 두드러진 특성은 행동입니다."),
+    dict(no=11, title="길을 외운 청소기",
+         scene="로봇청소기가 집 구조를 기억해 두고, 다음부터는 막히지 않는 길로 돌아다닌다.",
+         is_ai=True, tag="행동",
+         why="스스로 경로를 정해 바퀴를 움직여 수행합니다. 가장 두드러진 특성은 행동입니다."),
+    dict(no=12, title="장애물을 피하는 드론",
+         scene="드론이 나뭇가지를 발견하자 방향을 틀어 피해 날아갔다.",
+         is_ai=True, tag="행동",
+         why="상황 판단을 곧바로 비행 동작으로 바꿉니다. 가장 두드러진 특성은 행동입니다."),
+    dict(no=13, title="열리는 자동문",
+         scene="사람이 앞에 서면 문이 열리고, 비켜서면 닫힌다. 10년째 똑같다.",
+         is_ai=False, tag="없음",
+         why="센서에 뭔가 걸리면 모터를 돈다는 규칙 하나만 반복합니다. 알아차림(인식)과 움직임(행동)이 있어 보여도, 배우지도 판단하지도 않으므로 AI가 아닙니다."),
+    dict(no=14, title="해가 지면 켜지는 가로등",
+         scene="어두워지면 가로등이 켜지고, 날이 밝으면 꺼진다.",
+         is_ai=False, tag="없음",
+         why="'밝기가 기준보다 어두우면 켜라'는 고정된 규칙입니다. 어제보다 나아지는 일이 없으므로 AI가 아닙니다."),
+    dict(no=15, title="24도를 지키는 에어컨",
+         scene="24도로 맞춰 두면 더워지면 돌고 시원해지면 멈춘다.",
+         is_ai=False, tag="없음",
+         why="설정값과 비교해 켜고 끄는 자동 제어입니다. 사람의 습관을 배우지 않으므로 AI가 아닙니다."),
+    dict(no=16, title="표준 코스 세탁기",
+         scene="표준 코스를 누르면 언제나 똑같이 48분 동안 같은 순서로 세탁한다.",
+         is_ai=False, tag="없음",
+         why="정해진 순서(프로그램)를 그대로 따라가는 기계입니다. 판단이 없으므로 AI가 아닙니다."),
+    dict(no=17, title="틀리지 않는 계산기",
+         scene="7 x 8 을 누르면 0.01초 만에 56이 나온다. 사람보다 훨씬 빠르다.",
+         is_ai=False, tag="없음",
+         why="빠른 것과 똑똑한 것은 다릅니다. 정해진 계산 규칙만 수행하므로 AI가 아닙니다."),
+    dict(no=18, title="자동으로 더하는 표",
+         scene="엑셀에 점수를 입력하면 합계 칸이 저절로 바뀐다.",
+         is_ai=False, tag="없음",
+         why="사람이 넣어 둔 수식(SUM)을 다시 계산한 것뿐입니다. 스스로 배우거나 판단하지 않으므로 AI가 아닙니다."),
+    dict(no=19, title="30초마다 바뀌는 신호등",
+         scene="차가 한 대도 없는 새벽에도 신호등이 30초마다 초록과 빨강을 바꾼다.",
+         is_ai=False, tag="없음",
+         why="시간표대로만 작동합니다. (참고: 차량 수를 인식해 시간을 바꾸는 'AI 신호등'은 AI입니다.)"),
+    dict(no=20, title="버튼을 기다리는 엘리베이터",
+         scene="5층 버튼을 누르면 5층에 멈춘다. 아무도 누르지 않으면 가만히 있다.",
+         is_ai=False, tag="없음",
+         why="누른 층으로 간다는 규칙을 따릅니다. 사람의 출퇴근 패턴을 배워 미리 이동한다면 그때는 AI입니다."),
 ]
-CASE_BY_ID = {c["id"]: c for c in CASES}
-TOTAL_CASES = len(CASES)
-MAX_SCORE = TOTAL_CASES * (JUDGE_POINT + TAG_POINT)
+TOTAL_MAX = len(CASES) * (JUDGE_POINT + TAG_POINT)
 
 RANKS = [
-    (0.00, "🔍 수습 탐정", "이제 막 탐정 수첩을 받았어요. 다시 도전!"),
-    (0.50, "🕵️ 초보 탐정", "AI의 냄새를 맡기 시작했어요!"),
-    (0.70, "🎖️ 베테랑 탐정", "학습과 추론을 꽤 잘 구별하네요!"),
-    (0.85, "🏅 명탐정", "AI의 4가지 능력을 거의 다 꿰뚫었어요!"),
-    (0.95, "👑 AI 마스터 탐정", "완벽! 오늘부터 우리 반 AI 박사입니다!"),
+    (0.00, "수습 탐정", "아직 사건 보는 눈을 기르는 중"),
+    (0.40, "3급 탐정", "AI의 냄새를 맡기 시작했다"),
+    (0.60, "2급 탐정", "웬만한 함정은 피해 간다"),
+    (0.75, "1급 탐정", "증거로 말하는 탐정"),
+    (0.90, "명탐정", "AI 판별의 달인"),
+    (1.00, "AI 마스터 탐정", "완벽 해결. 서장이 직접 악수를 청했다"),
 ]
 
-# ----------------------------------------------------------------------------
-# 데이터베이스 (반 전체 실시간 집계용)
-# ----------------------------------------------------------------------------
-def get_conn():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL;")
-    return conn
+def get_rank(score):
+    ratio = score / TOTAL_MAX if TOTAL_MAX else 0
+    title, desc = RANKS[0][1], RANKS[0][2]
+    for th, t, d in RANKS:
+        if ratio >= th:
+            title, desc = t, d
+    return title, desc
 
+# ----------------------------------------------------------------------------
+# DB
+# ----------------------------------------------------------------------------
+def conn():
+    c = sqlite3.connect(DB_PATH, check_same_thread=False)
+    c.execute("PRAGMA journal_mode=WAL")
+    return c
 
 def init_db():
-    with get_conn() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS responses(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                room TEXT, nickname TEXT, case_id INTEGER,
-                judge_ok INTEGER, tag_match INTEGER,
-                score REAL, picked TEXT, ts TEXT)
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS definitions(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                room TEXT, nickname TEXT, sentence TEXT,
-                total REAL, ts TEXT)
-        """)
-
-
-def save_response(room, nickname, case_id, judge_ok, tag_match, score, picked):
-    with get_conn() as conn:
-        conn.execute("DELETE FROM responses WHERE room=? AND nickname=? AND case_id=?",
-                     (room, nickname, case_id))
-        conn.execute("""INSERT INTO responses
-                        (room, nickname, case_id, judge_ok, tag_match, score, picked, ts)
-                        VALUES (?,?,?,?,?,?,?,?)""",
-                     (room, nickname, case_id, int(judge_ok), int(tag_match),
-                      float(score), ",".join(picked), datetime.now().isoformat(timespec="seconds")))
-
-
-def save_definition(room, nickname, sentence, total):
-    with get_conn() as conn:
-        conn.execute("DELETE FROM definitions WHERE room=? AND nickname=?", (room, nickname))
-        conn.execute("""INSERT INTO definitions (room, nickname, sentence, total, ts)
-                        VALUES (?,?,?,?,?)""",
-                     (room, nickname, sentence, float(total),
-                      datetime.now().isoformat(timespec="seconds")))
-
-
-def load_responses(room=None):
-    with get_conn() as conn:
-        if room:
-            return pd.read_sql_query("SELECT * FROM responses WHERE room=?", conn, params=(room,))
-        return pd.read_sql_query("SELECT * FROM responses", conn)
-
-
-def load_definitions(room=None):
-    with get_conn() as conn:
-        if room:
-            return pd.read_sql_query("SELECT * FROM definitions WHERE room=? ORDER BY id DESC",
-                                     conn, params=(room,))
-        return pd.read_sql_query("SELECT * FROM definitions ORDER BY id DESC", conn)
-
-
-def reset_room(room):
-    with get_conn() as conn:
-        conn.execute("DELETE FROM responses WHERE room=?", (room,))
-        conn.execute("DELETE FROM definitions WHERE room=?", (room,))
-
-
+    with conn() as c:
+        c.execute("""CREATE TABLE IF NOT EXISTS logs(
+            cls TEXT, num TEXT, name TEXT, case_no INTEGER,
+            judge_ok INTEGER, tag_ok INTEGER, score INTEGER,
+            my_judge TEXT, my_tag TEXT, ts TEXT,
+            PRIMARY KEY (cls, num, case_no))""")
+        c.execute("""CREATE TABLE IF NOT EXISTS defs(
+            cls TEXT, num TEXT, name TEXT, sentence TEXT, ts TEXT,
+            PRIMARY KEY (cls, num))""")
 init_db()
 
+def save_log(cls, num, name, case_no, judge_ok, tag_ok, score, my_judge, my_tag):
+    with conn() as c:
+        c.execute("""INSERT OR IGNORE INTO logs VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                  (cls, num, name, case_no, int(judge_ok), int(tag_ok), score,
+                   my_judge, my_tag, datetime.datetime.now().isoformat(timespec="seconds")))
+
+def save_def(cls, num, name, sentence):
+    with conn() as c:
+        c.execute("""INSERT INTO defs VALUES (?,?,?,?,?)
+                     ON CONFLICT(cls,num) DO UPDATE SET name=excluded.name,
+                     sentence=excluded.sentence, ts=excluded.ts""",
+                  (cls, num, name, sentence,
+                   datetime.datetime.now().isoformat(timespec="seconds")))
+
+def my_logs(cls, num):
+    with conn() as c:
+        return pd.read_sql_query(
+            "SELECT * FROM logs WHERE cls=? AND num=? ORDER BY case_no", c, params=(cls, num))
+
+def class_logs(cls):
+    with conn() as c:
+        return pd.read_sql_query("SELECT * FROM logs WHERE cls=?", c, params=(cls,))
+
+def class_defs(cls):
+    with conn() as c:
+        return pd.read_sql_query(
+            "SELECT cls,num,name,sentence,ts FROM defs WHERE cls=? ORDER BY ts DESC", c, params=(cls,))
+
+def my_def(cls, num):
+    with conn() as c:
+        r = c.execute("SELECT sentence FROM defs WHERE cls=? AND num=?", (cls, num)).fetchone()
+    return r[0] if r else ""
+
+def reset_class(cls):
+    with conn() as c:
+        c.execute("DELETE FROM logs WHERE cls=?", (cls,))
+        c.execute("DELETE FROM defs WHERE cls=?", (cls,))
+
 # ----------------------------------------------------------------------------
-# 스타일
+# 테마 (기밀문서 / 느와르)
 # ----------------------------------------------------------------------------
-st.markdown("""
+CSS = """
 <style>
-.block-container {max-width: 1080px; padding-top: 1.2rem;}
-.hero {
-  background:#1f2a44; color:#fff; border-radius:22px; padding:26px 28px; margin-bottom:14px;
-  border:3px solid #ffd166;
+@import url('https://fonts.googleapis.com/css2?family=Special+Elite&family=Nanum+Myeongjo:wght@400;700;800&family=Gaegu:wght@400;700&display=swap');
+
+.stApp{
+  background:
+    radial-gradient(ellipse at 50% -10%, rgba(120,95,60,.22), transparent 60%),
+    radial-gradient(ellipse at 50% 120%, rgba(0,0,0,.9), transparent 55%),
+    #0a0908;
+  color:#d8cdb8;
+  font-family:'Nanum Myeongjo', serif;
 }
-.hero h1 {margin:0; font-size:34px; letter-spacing:-1px;}
-.hero p {margin:6px 0 0; font-size:15px; opacity:.9;}
-.case-card {
-  background:#fffbeb; border:3px dashed #e0a800; border-radius:22px;
-  padding:26px 28px; color:#3d2b00; text-align:center;
+#MainMenu, footer, header{visibility:hidden;}
+.block-container{padding-top:1.2rem; max-width:1150px;}
+
+/* ---------- 상단 사건 헤더 ---------- */
+.dossier-top{
+  border:1px solid #4a4034; border-top:3px solid #8b1a1a;
+  background:linear-gradient(180deg,#171310 0%,#0d0b09 100%);
+  padding:14px 18px; margin-bottom:14px;
+  display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;
 }
-.case-emoji {font-size:70px; line-height:1;}
-.case-no {font-size:14px; font-weight:800; color:#a07400; letter-spacing:1px;}
-.case-title {font-size:28px; font-weight:900; margin:6px 0 8px; color:#2b2b2b;}
-.case-desc {font-size:18px; line-height:1.6; color:#4b4b4b;}
-.trait-box {
-  border:2px solid #d6dbe6; border-radius:16px; padding:14px 16px; background:#f7f9fc;
-  color:#22314d; min-height:118px;
+.dossier-top .lbl{font-family:'Special Elite',monospace; color:#8a7b62; font-size:11px; letter-spacing:3px;}
+.dossier-top .val{font-family:'Special Elite',monospace; color:#e6dcc6; font-size:14px; letter-spacing:1px;}
+.stamp-red{
+  font-family:'Special Elite',monospace; color:#b3271f; border:2px solid #b3271f;
+  padding:3px 10px; letter-spacing:4px; font-size:13px;
+  transform:rotate(-3deg); opacity:.9;
 }
-.trait-box b {font-size:17px;}
-.trait-box span {font-size:13px; color:#4a5a78;}
-.ok-box {background:#e9f9ef; border:3px solid #34a853; border-radius:18px; padding:18px 22px; color:#14532d;}
-.no-box {background:#fdecec; border:3px solid #ea4335; border-radius:18px; padding:18px 22px; color:#7f1d1d;}
-.badge {display:inline-block; padding:4px 12px; border-radius:999px; font-size:13px; font-weight:800; margin-right:6px;}
-.b-ai {background:#1f2a44; color:#ffd166;}
-.b-no {background:#eceff4; color:#2b3a55;}
-.score-pill {background:#ffd166; color:#3d2b00; font-weight:900; padding:8px 16px; border-radius:999px; display:inline-block;}
-div.stButton > button {border-radius:14px; font-weight:800; padding:12px 8px; font-size:17px;}
-.small {font-size:13px; color:#6b7280;}
+
+/* ---------- 크라프트 종이 ---------- */
+.paper{
+  background:
+    repeating-linear-gradient(0deg, rgba(0,0,0,.015) 0 2px, transparent 2px 4px),
+    linear-gradient(135deg,#e2d3ae 0%,#d3c096 45%,#c9b689 100%);
+  color:#2a2118; border-radius:3px;
+  padding:26px 30px 24px; position:relative;
+  box-shadow:0 18px 40px rgba(0,0,0,.65), inset 0 0 70px rgba(120,90,45,.25);
+  border:1px solid #a89468;
+}
+.paper:before{
+  content:''; position:absolute; left:0; top:0; width:100%; height:100%;
+  background:radial-gradient(circle at 85% 10%, rgba(90,60,20,.18), transparent 35%);
+  pointer-events:none;
+}
+.paper .secret{
+  font-family:'Special Elite',monospace; color:#9d2118; font-size:14px; letter-spacing:5px;
+  border-bottom:2px solid #9d2118; display:inline-block; padding-bottom:2px; transform:rotate(-2deg);
+}
+.paper .classified{
+  font-family:'Special Elite',monospace; color:#2a2118; font-size:12px; letter-spacing:4px;
+  border-bottom:1.5px solid #2a2118; display:inline-block; margin-top:6px; transform:rotate(-2deg); opacity:.75;
+}
+.paper .caseno{
+  font-family:'Special Elite',monospace; font-size:12px; letter-spacing:2px; color:#6a5a3f;
+  text-align:right; border-bottom:1px solid #8c7a55; padding-bottom:3px; margin-bottom:14px;
+}
+.paper h2{
+  font-family:'Nanum Myeongjo',serif; font-weight:800; color:#8c1d14;
+  font-size:30px; margin:6px 0 2px; letter-spacing:-.5px;
+}
+.evidence-box{
+  border:2px solid #2aa8bd; background:rgba(255,255,255,.18);
+  padding:18px 20px; margin:16px 0 6px; font-size:19px; line-height:1.75; color:#241c13;
+}
+.paper .foot{
+  font-family:'Special Elite',monospace; font-size:11px; color:#6a5a3f;
+  letter-spacing:2px; margin-top:16px; text-align:center;
+}
+.paper .why{font-size:16px; line-height:1.8; color:#2a2118;}
+
+/* ---------- 어두운 패널 ---------- */
+.panel{
+  border:1px solid #42392d; background:#131110; padding:16px 18px; margin:10px 0;
+}
+.panel h4{
+  font-family:'Special Elite',monospace; color:#c9b689; font-size:13px;
+  letter-spacing:3px; margin:0 0 10px; border-bottom:1px dashed #4a4034; padding-bottom:6px;
+}
+.kv{display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px dotted #332c23; font-size:15px;}
+.kv span:last-child{color:#e6dcc6; font-weight:700;}
+.metric{border:1px solid #42392d; background:#131110; padding:12px 14px; text-align:left;}
+.metric .l{font-family:'Special Elite',monospace; font-size:11px; letter-spacing:2px; color:#8a7b62;}
+.metric .v{font-size:28px; color:#e6dcc6; font-weight:800; line-height:1.25;}
+.metric .s{font-size:12px; color:#9c8e75;}
+.tagchip{
+  display:inline-block; font-family:'Special Elite',monospace; font-size:11px; letter-spacing:2px;
+  border:1px solid #2aa8bd; color:#8fd9e4; padding:2px 8px; margin-right:6px;
+}
+.ok{color:#5fbf71; font-weight:700;} .ng{color:#c9483d; font-weight:700;}
+.hint{font-family:'Gaegu',cursive; font-size:17px; color:#b5a68c;}
+
+/* ---------- 위젯 ---------- */
+section[data-testid="stSidebar"]{background:#0e0c0b; border-right:1px solid #3a322a;}
+section[data-testid="stSidebar"] *{color:#cdc0a8;}
+div.stButton>button{
+  width:100%; font-family:'Special Elite',monospace; letter-spacing:2px; font-size:15px;
+  background:#1a1614; color:#d8cdb8; border:2px dashed #7d6c4d; border-radius:2px; padding:12px 6px;
+  transition:.15s;
+}
+div.stButton>button:hover{border-color:#2aa8bd; color:#8fd9e4; background:#141a1c;}
+div.stButton>button[kind="primary"]{
+  background:#7d1a12; border:2px solid #b3271f; color:#f0e4cc;
+}
+div.stButton>button[kind="primary"]:hover{background:#9d2118; color:#fff;}
+div[data-testid="stRadio"] label p, .stSelectbox label p, .stTextInput label p, .stTextArea label p{
+  color:#c9b689 !important; font-family:'Special Elite',monospace; letter-spacing:1px; font-size:12px;
+}
+div[data-testid="stRadio"] div[role="radiogroup"] label{
+  border:1px solid #3a322a; background:#141110; padding:8px 12px; margin-bottom:6px; width:100%;
+}
+div[data-testid="stRadio"] div[role="radiogroup"] label:hover{border-color:#2aa8bd; background:#121819;}
+div[data-testid="stRadio"] div[role="radiogroup"] label p{font-family:'Nanum Myeongjo',serif; font-size:16px; color:#d8cdb8 !important; letter-spacing:0;}
+.stSelectbox div[data-baseweb="select"]>div, .stTextInput input, .stTextArea textarea{
+  background:#17130f !important; border:1px solid #574a37 !important; color:#e6dcc6 !important;
+}
+div[data-testid="stProgress"]>div>div>div>div{background:#b3271f;}
+.stTabs [data-baseweb="tab"]{font-family:'Special Elite',monospace; letter-spacing:2px; color:#8a7b62;}
+.stTabs [aria-selected="true"]{color:#8fd9e4 !important;}
+div[data-testid="stDataFrame"]{border:1px solid #42392d;}
+hr{border-color:#3a322a;}
 </style>
-""", unsafe_allow_html=True)
+"""
+st.markdown(CSS, unsafe_allow_html=True)
 
+def paper(inner):
+    st.markdown('<div class="paper">' + inner + '</div>', unsafe_allow_html=True)
 
 # ----------------------------------------------------------------------------
-# 세션 상태
+# 사이드바 : 탐정 등록
 # ----------------------------------------------------------------------------
-def init_state():
-    d = {
-        "page": "입장", "room": "1반", "nickname": "",
-        "idx": 0, "stage": "judge", "judge": None, "picked": [],
-        "score": 0.0, "log": [], "hint": False, "saved_def": False,
-    }
-    for k, v in d.items():
-        st.session_state.setdefault(k, v)
-
-
-init_state()
 ss = st.session_state
+ss.setdefault("registered", False)
+ss.setdefault("cls", CLASS_LIST[0])
+ss.setdefault("num", NUM_LIST[0])
+ss.setdefault("name", "")
+ss.setdefault("judge", None)
+ss.setdefault("page", "사건 브리핑")
 
-
-def reset_game():
-    ss.idx, ss.stage, ss.judge, ss.picked = 0, "judge", None, []
-    ss.score, ss.log, ss.hint, ss.saved_def = 0.0, [], False, False
-
-
-def rank_of(ratio):
-    name, msg = RANKS[0][1], RANKS[0][2]
-    for cut, n, m in RANKS:
-        if ratio >= cut:
-            name, msg = n, m
-    return name, msg
-
-
-# ----------------------------------------------------------------------------
-# 사이드바
-# ----------------------------------------------------------------------------
 with st.sidebar:
-    st.markdown("## 🕵️ AI 탐정소")
-    st.caption("4-1-1 · AI를 찾아라")
-    pages = ["입장", "사건 수사", "내 수사 결과", "반 전체 현황", "AI 특성 사전"]
-    ss.page = st.radio("메뉴", pages, index=pages.index(ss.page), label_visibility="collapsed")
+    st.markdown(
+        '<div style="font-family:Special Elite,monospace;color:#b3271f;border:2px solid #b3271f;'
+        'text-align:center;letter-spacing:4px;padding:6px;transform:rotate(-2deg);margin-bottom:14px;">'
+        'TOP SECRET</div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel"><h4>DETECTIVE ID</h4></div>', unsafe_allow_html=True)
+    cls = st.selectbox("소속 (반)", CLASS_LIST, index=CLASS_LIST.index(ss.cls))
+    num = st.selectbox("요원 번호", NUM_LIST, index=NUM_LIST.index(ss.num))
+    name = st.text_input("탐정 이름 (본명)", value=ss.name, max_chars=12, placeholder="예) 김하늘")
 
-    st.divider()
-    if ss.nickname:
-        st.success(f"{ss.room} / {ss.nickname} 탐정님\n\n진행 {len(ss.log)} / {TOTAL_CASES}")
-        st.metric("현재 점수", f"{ss.score:.1f} 점")
-    else:
-        st.info("먼저 입장 메뉴에서 이름을 등록하세요.")
+    if st.button("🔎 수사 등록 / 변경", type="primary"):
+        if not name.strip():
+            st.warning("탐정 이름을 입력해야 사건 파일을 열 수 있습니다.")
+        else:
+            ss.cls, ss.num, ss.name = cls, num, name.strip()
+            ss.registered = True
+            ss.judge = None
+            st.success(f"{cls} {num} {name.strip()} 탐정 등록 완료")
 
-    st.divider()
-    with st.expander("👩‍🏫 선생님 모드"):
-        pin = st.text_input("비밀번호", type="password", key="pin")
+    if ss.registered:
+        st.markdown(f'<div class="panel"><h4>STATUS</h4>'
+                    f'<div class="kv"><span>소속</span><span>{ss.cls}</span></div>'
+                    f'<div class="kv"><span>번호</span><span>{ss.num}</span></div>'
+                    f'<div class="kv"><span>이름</span><span>{ss.name}</span></div></div>',
+                    unsafe_allow_html=True)
+
+    st.markdown("---")
+    ss.page = st.radio("수사 메뉴",
+                       ["사건 브리핑", "수사실 (20건)", "내 수사 보고서", "상황실 (반 전체)", "AI 특성 사전"],
+                       index=["사건 브리핑", "수사실 (20건)", "내 수사 보고서", "상황실 (반 전체)", "AI 특성 사전"].index(ss.page))
+
+    st.markdown("---")
+    with st.expander("👮 선생님 모드"):
+        pin = st.text_input("PIN", type="password", key="pin")
         if pin == TEACHER_PIN:
-            st.caption(f"DB: {DB_PATH.name}")
-            target = st.text_input("초기화할 반", value=ss.room, key="reset_room")
-            if st.button("🗑️ 해당 반 기록 삭제", use_container_width=True):
-                reset_room(target)
-                st.success(f"{target} 기록을 비웠습니다.")
+            tcls = st.selectbox("대상 반", CLASS_LIST, key="tcls")
+            df_t = class_logs(tcls)
+            st.caption(f"기록 {len(df_t)}건 / 참여 {df_t[['num']].drop_duplicates().shape[0] if len(df_t) else 0}명")
+            if len(df_t):
+                st.download_button("기록 CSV 내려받기",
+                                   df_t.to_csv(index=False).encode("utf-8-sig"),
+                                   file_name=f"AI탐정소_{tcls}_기록.csv", mime="text/csv")
+            dd = class_defs(tcls)
+            if len(dd):
+                st.download_button("AI 정의 CSV 내려받기",
+                                   dd.to_csv(index=False).encode("utf-8-sig"),
+                                   file_name=f"AI탐정소_{tcls}_정의.csv", mime="text/csv")
+            st.markdown("초기화 (복구 불가)")
+            if st.checkbox(f"{tcls} 기록 삭제에 동의"):
+                if st.button("기록 초기화"):
+                    reset_class(tcls)
+                    st.success(f"{tcls} 기록을 초기화했습니다.")
         elif pin:
-            st.error("비밀번호가 달라요.")
-
+            st.error("PIN이 올바르지 않습니다.")
 
 # ----------------------------------------------------------------------------
-# 1) 입장
+# 상단 헤더
 # ----------------------------------------------------------------------------
-def page_enter():
-    st.markdown("""
-    <div class="hero">
-      <h1>🕵️ AI 탐정소 · 사건번호 4-1-1</h1>
-      <p>"요즘 세상엔 AI인 척하는 기계가 너무 많다!"<br>
-      생활 속 사례 <b>20장</b>을 보고 <b>AI인지 아닌지</b> 판정하고,
-      AI의 능력 <b>4가지(인식·학습·추론·행동)</b>로 태그를 붙여 주세요.</p>
-    </div>
-    """, unsafe_allow_html=True)
+who = f"{ss.cls} {ss.num} {ss.name}" if ss.registered else "미등록"
+done_n = len(my_logs(ss.cls, ss.num)) if ss.registered else 0
+st.markdown(
+    '<div class="dossier-top">'
+    '<div><div class="lbl">CASE FILE</div><div class="val">4-1-1 &nbsp;AI를 찾아라</div></div>'
+    f'<div><div class="lbl">DETECTIVE</div><div class="val">{who}</div></div>'
+    f'<div><div class="lbl">PROGRESS</div><div class="val">{done_n} / {len(CASES)} 건 종결</div></div>'
+    '<div class="stamp-red">CLASSIFIED</div>'
+    '</div>', unsafe_allow_html=True)
 
+# ----------------------------------------------------------------------------
+# 1. 사건 브리핑
+# ----------------------------------------------------------------------------
+if ss.page == "사건 브리핑":
+    paper(
+        '<div class="caseno">FILE No. 4-1-1 &nbsp;|&nbsp; 정보 4-1. 인공지능의 이해</div>'
+        '<div class="secret">TOP SECRET</div><br>'
+        '<div class="classified">CLASSIFIED</div>'
+        '<h2>AI를 찾아라</h2>'
+        '<div class="evidence-box">'
+        '디지털 탐정단 여러분. 우리 주변에는 <b>AI인 척하는 기계</b>가 숨어 있다.<br>'
+        '제출된 사건 파일 <b>20건</b>을 읽고 <b>AI인지 아닌지</b> 판정하라.<br>'
+        '그리고 그 사건의 <b>가장 두드러진 특성 1가지</b>를 지목하라.'
+        '</div>'
+        '<div class="foot">태블릿 전원 ON / 사이드바에서 반·번호·이름 등록 후 수사 시작</div>')
+
+    st.markdown("<br>", unsafe_allow_html=True)
     c = st.columns(4)
-    for col, k in zip(c, TRAIT_KEYS):
-        t = TRAITS[k]
-        col.markdown(f"""<div class="trait-box">{t['emoji']} <b>{k}</b><br>
-        <span>{t['short']}<br>{t['ex']}</span></div>""", unsafe_allow_html=True)
+    cards = [("인식", "보고 · 듣고 알아차린다", "카메라로 얼굴을 알아봄, 목소리를 알아들음"),
+             ("학습", "데이터로 스스로 똑똑해진다", "쓸수록 추천이 정확해짐"),
+             ("추론", "아는 것으로 판단한다", "다음 수를 따져 가장 좋은 선택을 함"),
+             ("행동", "판단한 대로 움직인다", "스스로 브레이크를 밟음")]
+    for col, (t, d, e) in zip(c, cards):
+        col.markdown(f'<div class="panel"><h4>{t}</h4>'
+                     f'<div style="font-size:16px;color:#e6dcc6;">{d}</div>'
+                     f'<div style="font-size:13px;color:#9c8e75;margin-top:6px;">예) {e}</div></div>',
+                     unsafe_allow_html=True)
 
-    st.write("")
-    st.markdown("#### 🪪 탐정 등록")
-    a, b = st.columns([1, 2])
-    ss.room = a.text_input("반 (같은 반끼리 점수가 모여요)", value=ss.room)
-    ss.nickname = b.text_input("내 이름 또는 탐정 별명", value=ss.nickname,
-                               placeholder="예: 1-3 김하늘 / 추리왕하늘")
+    st.markdown(
+        '<div class="panel"><h4>DETECTIVE TIP</h4>'
+        '<div class="hint">① 센서가 있다고 다 AI는 아니다. <b>자동 ≠ 인공지능</b><br>'
+        '② 결정적 단서는 이것! "<b>쓸수록 더 똑똑해지는가?</b>", "<b>스스로 판단하는가?</b>"<br>'
+        '③ 10년째 똑같이 작동한다면 그건 그냥 기계다.</div></div>', unsafe_allow_html=True)
 
-    st.markdown("""
-    <span class="small">
-    ⏱️ 사건 1장당 2단계 &nbsp;|&nbsp; ① AI다 / AI 아니다 판정(10점)
-    &nbsp;② AI 특성 태깅(최대 10점) &nbsp;|&nbsp; 만점 400점
-    </span>
-    """, unsafe_allow_html=True)
-    st.write("")
-
-    if st.button("🚀 수사 시작!", type="primary", use_container_width=True):
-        if not ss.nickname.strip() or not ss.room.strip():
-            st.error("반과 이름을 모두 적어 주세요!")
-        else:
-            reset_game()
-            ss.page = "사건 수사"
-            st.rerun()
-
-    with st.expander("💡 탐정 필살 요령 (헷갈릴 때 이것만 기억!)"):
-        st.markdown("""
-        - 학습과 추론이 둘 다 있으면 → AI일 가능성이 매우 높아요.
-        - 인식 + 행동만 있으면 → 그냥 센서 기계예요. (자동문, 가로등처럼요)
-        - 결정적 단서 질문 2개
-            1. "쓸수록 똑똑해지나요?" → 예 = 학습 O
-            2. "상황마다 다르게 판단하나요?" → 예 = 추론 O
-        """)
-
+    if not ss.registered:
+        st.info("왼쪽 사이드바에서 반 · 번호 · 이름을 등록하면 수사실 문이 열립니다.")
 
 # ----------------------------------------------------------------------------
-# 2) 사건 수사
+# 2. 수사실
 # ----------------------------------------------------------------------------
-def page_quiz():
-    if not ss.nickname.strip():
-        st.warning("먼저 입장 메뉴에서 탐정 등록을 해 주세요!")
-        return
+elif ss.page == "수사실 (20건)":
+    if not ss.registered:
+        st.warning("사이드바에서 탐정 등록을 먼저 해 주세요.")
+        st.stop()
 
-    if ss.idx >= TOTAL_CASES:
-        st.balloons()
-        st.success("20장 수사 완료! 내 수사 결과 메뉴에서 성적과 AI 정의를 작성하세요.")
-        if st.button("📄 내 수사 결과 보기", type="primary", use_container_width=True):
-            ss.page = "내 수사 결과"
-            st.rerun()
-        return
+    logs = my_logs(ss.cls, ss.num)
+    solved = set(logs["case_no"].tolist())
+    st.progress(len(solved) / len(CASES))
 
-    case = CASES[ss.idx]
-    st.progress(ss.idx / TOTAL_CASES, text=f"사건 {ss.idx + 1} / {TOTAL_CASES}")
-    top1, top2 = st.columns([3, 1])
-    top1.markdown(f"#### 🗂️ 사건 파일 제{case['id']}호")
-    top2.markdown(f"<div style='text-align:right'><span class='score-pill'>⭐ {ss.score:.1f}점</span></div>",
-                  unsafe_allow_html=True)
+    remain = [c for c in CASES if c["no"] not in solved]
+    labels = [("✔ " if c["no"] in solved else "□ ") + f"{c['no']:02d}. {c['title']}" for c in CASES]
+    default_idx = CASES.index(remain[0]) if remain else 0
+    pick = st.selectbox("사건 파일 선택", labels, index=default_idx)
+    case = CASES[labels.index(pick)]
+    already = case["no"] in solved
 
-    st.markdown(f"""
-    <div class="case-card">
-      <div class="case-emoji">{case['emoji']}</div>
-      <div class="case-no">CASE #{case['id']:02d}</div>
-      <div class="case-title">{case['title']}</div>
-      <div class="case-desc">{case['desc']}</div>
-    </div>
-    """, unsafe_allow_html=True)
-    st.write("")
+    paper(
+        f'<div class="caseno">CASE No. {case["no"]:02d} / {len(CASES)} &nbsp;&nbsp; NAME: {ss.name} &nbsp;&nbsp; CLASS: {ss.cls} {ss.num}</div>'
+        '<div class="secret">EVIDENCE</div>'
+        f'<h2>{case["title"]}</h2>'
+        f'<div class="evidence-box">{case["scene"]}</div>'
+        '<div class="foot">아래에서 ① AI 여부 판정 → ② 특성 1개 지목 → ③ 보고서 제출</div>')
 
-    # --- 1단계: 판정 ---
-    if ss.stage == "judge":
-        st.markdown("##### 🔎 1단계 · 이것은 AI일까요?")
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    if already:
+        row = logs[logs["case_no"] == case["no"]].iloc[0]
+        st.markdown(
+            f'<div class="panel"><h4>CASE CLOSED</h4>'
+            f'<div class="kv"><span>내 판정</span><span>{row["my_judge"]} '
+            f'{"<span class=ok>정답</span>" if row["judge_ok"] else "<span class=ng>오답</span>"}</span></div>'
+            f'<div class="kv"><span>내 지목 특성</span><span>{row["my_tag"]} '
+            f'{"<span class=ok>정답</span>" if row["tag_ok"] else "<span class=ng>오답</span>"}</span></div>'
+            f'<div class="kv"><span>획득 점수</span><span>{row["score"]} 점</span></div></div>',
+            unsafe_allow_html=True)
+        verdict = "AI다" if case["is_ai"] else "AI가 아니다"
+        ans_tag = case["tag"] if case["is_ai"] else "해당 없음"
+        paper(f'<div class="secret">SOLUTION</div><h2 style="font-size:22px;">판정: {verdict} · 특성: {ans_tag}</h2>'
+              f'<div class="why">{case["why"]}</div>')
+        st.caption("※ 한 번 종결한 사건은 다시 수사할 수 없습니다. (중복 제출 불가)")
+    else:
+        st.markdown('<div class="panel"><h4>STEP 1 &nbsp;판정</h4></div>', unsafe_allow_html=True)
         c1, c2 = st.columns(2)
-        if c1.button("🤖 AI 다!", use_container_width=True, type="primary"):
-            ss.judge = True
-            ss.stage = "tag"
-            st.rerun()
-        if c2.button("⚙️ AI 아니다!", use_container_width=True):
-            ss.judge = False
-            ss.stage = "tag"
-            st.rerun()
+        if c1.button("🤖 AI 다", type="primary" if ss.judge == "AI다" else "secondary", key=f"y{case['no']}"):
+            ss.judge = "AI다"
+        if c2.button("⚙ AI 아니다", type="primary" if ss.judge == "AI가 아니다" else "secondary", key=f"n{case['no']}"):
+            ss.judge = "AI가 아니다"
+        st.markdown(f'<div class="hint">현재 선택: <b>{ss.judge or "미선택"}</b></div>', unsafe_allow_html=True)
 
-        if st.button("💡 힌트 보기", use_container_width=True):
-            ss.hint = not ss.hint
-            st.rerun()
-        if ss.hint:
-            st.info("쓸수록 똑똑해지나요?(학습) 그리고 상황마다 다르게 판단하나요?(추론) "
-                    "두 질문에 모두 '예'라면 AI예요!")
+        st.markdown('<div class="panel"><h4>STEP 2 &nbsp;특성 지목 (단 하나만)</h4></div>', unsafe_allow_html=True)
+        tag_pick = st.radio("이 사건에서 가장 두드러진 AI 특성은?", TAG_OPTIONS,
+                            index=None, key=f"t{case['no']}")
 
-    # --- 2단계: 태깅 ---
-    elif ss.stage == "tag":
-        st.markdown(f"##### 🏷️ 2단계 · 내 판정: {'🤖 AI 다' if ss.judge else '⚙️ AI 아니다'}")
-        st.caption("이 사례가 가지고 있는 능력을 모두 골라 주세요. (하나도 없으면 비워 두세요)")
-        cols = st.columns(4)
-        picked = []
-        for col, k in zip(cols, TRAIT_KEYS):
-            t = TRAITS[k]
-            with col:
-                if st.checkbox(f"{t['emoji']} {k}", key=f"tag_{case['id']}_{k}"):
-                    picked.append(k)
-                st.markdown(f"<span class='small'>{t['short']}</span>", unsafe_allow_html=True)
-
-        st.write("")
-        b1, b2 = st.columns([1, 3])
-        if b1.button("↩️ 판정 다시", use_container_width=True):
-            ss.stage = "judge"
-            st.rerun()
-        if b2.button("✅ 제출하고 정답 확인", type="primary", use_container_width=True):
-            answer_tags = case["tags"]
-            judge_ok = (ss.judge == case["is_ai"])
-            match = sum(1 for k in TRAIT_KEYS if (k in picked) == (k in answer_tags))
-            gained = (JUDGE_POINT if judge_ok else 0) + TAG_POINT * match / 4
-            ss.score += gained
-            ss.picked = picked
-            ss.log.append(dict(case_id=case["id"], title=case["title"],
-                               judge_ok=judge_ok, tag_match=match,
-                               gained=round(gained, 1), picked=list(picked)))
-            save_response(ss.room, ss.nickname, case["id"], judge_ok, match, gained, picked)
-            ss.stage = "feedback"
-            st.rerun()
-
-    # --- 3단계: 피드백 ---
-    else:
-        rec = ss.log[-1]
-        case = CASE_BY_ID[rec["case_id"]]
-        ans_label = "🤖 AI 입니다" if case["is_ai"] else "⚙️ AI가 아닙니다"
-        box = "ok-box" if rec["judge_ok"] else "no-box"
-        head = "정답! 👏" if rec["judge_ok"] else "아쉬워요 😅"
-        tag_txt = " ".join(f"{TRAITS[k]['emoji']}{k}" for k in case["tags"]) or "없음"
-        my_txt = " ".join(f"{TRAITS[k]['emoji']}{k}" for k in rec["picked"]) or "없음"
-
-        st.markdown(f"""
-        <div class="{box}">
-          <h3 style="margin:0 0 6px">{head} 정답은 <b>{ans_label}</b></h3>
-          <p style="margin:0; font-size:16px">{case['why']}</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-        m1, m2, m3 = st.columns(3)
-        m1.metric("판정 점수", f"{JUDGE_POINT if rec['judge_ok'] else 0} / {JUDGE_POINT}")
-        m2.metric("태깅 정확도", f"{rec['tag_match']} / 4 개")
-        m3.metric("이번 사건 획득", f"{rec['gained']} 점")
-        st.markdown(f"정답 태그: {tag_txt} &nbsp;&nbsp;|&nbsp;&nbsp; 내 태그: {my_txt}")
-
-        label = "➡️ 다음 사건으로" if ss.idx + 1 < TOTAL_CASES else "🏁 수사 종료하고 결과 보기"
-        if st.button(label, type="primary", use_container_width=True):
-            ss.idx += 1
-            ss.stage, ss.judge, ss.picked, ss.hint = "judge", None, [], False
-            if ss.idx >= TOTAL_CASES:
-                ss.page = "내 수사 결과"
-            st.rerun()
-
+        if st.button("📝 수사 보고서 제출", type="primary", key=f"s{case['no']}"):
+            if ss.judge is None or tag_pick is None:
+                st.error("판정과 특성을 모두 선택해야 제출할 수 있습니다.")
+            else:
+                judge_ok = (ss.judge == "AI다") == case["is_ai"]
+                my_tag = TAG_KEY[tag_pick]
+                tag_ok = (my_tag == case["tag"])
+                score = (JUDGE_POINT if judge_ok else 0) + (TAG_POINT if tag_ok else 0)
+                save_log(ss.cls, ss.num, ss.name, case["no"], judge_ok, tag_ok, score,
+                         ss.judge, my_tag if my_tag != "없음" else "해당 없음")
+                ss.judge = None
+                if score == JUDGE_POINT + TAG_POINT:
+                    st.balloons()
+                st.rerun()
 
 # ----------------------------------------------------------------------------
-# 3) 내 수사 결과 + AI 정의 1문장
+# 3. 내 수사 보고서
 # ----------------------------------------------------------------------------
-def page_result():
-    if not ss.log:
-        st.info("아직 수사 기록이 없어요. 사건 수사 메뉴에서 시작해 보세요!")
-        return
+elif ss.page == "내 수사 보고서":
+    if not ss.registered:
+        st.warning("사이드바에서 탐정 등록을 먼저 해 주세요.")
+        st.stop()
 
-    df = pd.DataFrame(ss.log)
-    done = len(df)
-    ratio = ss.score / (done * (JUDGE_POINT + TAG_POINT))
-    rname, rmsg = rank_of(ratio)
+    logs = my_logs(ss.cls, ss.num)
+    total = int(logs["score"].sum()) if len(logs) else 0
+    jok = int(logs["judge_ok"].sum()) if len(logs) else 0
+    tok = int(logs["tag_ok"].sum()) if len(logs) else 0
+    rank, rdesc = get_rank(total)
 
-    st.markdown(f"""
-    <div class="hero">
-      <h1>{rname}</h1>
-      <p>{ss.room} · {ss.nickname} 탐정 &nbsp;|&nbsp; {rmsg}</p>
-    </div>
-    """, unsafe_allow_html=True)
+    paper(f'<div class="caseno">FINAL REPORT &nbsp;|&nbsp; {ss.cls} {ss.num} {ss.name}</div>'
+          '<div class="secret">RESULT</div>'
+          f'<h2>{rank}</h2><div class="why">{rdesc}</div>'
+          f'<div class="evidence-box" style="font-size:17px;">종결 {len(logs)}건 / 총점 '
+          f'<b>{total}점</b> (만점 {TOTAL_MAX}점) &nbsp;·&nbsp; 판정 정답 {jok}건 &nbsp;·&nbsp; 특성 정답 {tok}건</div>')
 
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("총점", f"{ss.score:.1f} 점", f"만점 {done * 20}점")
-    k2.metric("판정 정답", f"{int(df['judge_ok'].sum())} / {done} 개")
-    k3.metric("판정 정답률", f"{df['judge_ok'].mean() * 100:.0f} %")
-    k4.metric("태깅 정확도", f"{df['tag_match'].mean() / 4 * 100:.0f} %")
+    st.markdown("<br>", unsafe_allow_html=True)
+    m = st.columns(4)
+    vals = [("TOTAL SCORE", f"{total}", f"/ {TOTAL_MAX}점"),
+            ("CASES CLOSED", f"{len(logs)}", f"/ {len(CASES)}건"),
+            ("JUDGE ACC.", f"{(jok/len(logs)*100):.0f}%" if len(logs) else "-", "AI 여부 정확도"),
+            ("TAG ACC.", f"{(tok/len(logs)*100):.0f}%" if len(logs) else "-", "특성 지목 정확도")]
+    for col, (l, v, s) in zip(m, vals):
+        col.markdown(f'<div class="metric"><div class="l">{l}</div><div class="v">{v}</div>'
+                     f'<div class="s">{s}</div></div>', unsafe_allow_html=True)
 
-    st.markdown("##### 📋 사건별 기록")
-    view = df.assign(
-        판정=lambda d: d["judge_ok"].map({True: "⭕ 정답", False: "❌ 오답"}),
-        태깅=lambda d: d["tag_match"].astype(str) + " / 4",
-        내태그=lambda d: d["picked"].map(lambda p: ", ".join(p) if p else "없음"),
-    )[["case_id", "title", "판정", "태깅", "내태그", "gained"]]
-    view.columns = ["번호", "사건", "AI 판정", "특성 태깅", "내가 고른 태그", "획득 점수"]
-    st.dataframe(view, use_container_width=True, hide_index=True)
+    if len(logs):
+        title_map = {c["no"]: c["title"] for c in CASES}
+        ans_map = {c["no"]: ("AI다" if c["is_ai"] else "AI가 아니다") for c in CASES}
+        tag_map = {c["no"]: (c["tag"] if c["is_ai"] else "해당 없음") for c in CASES}
+        view = pd.DataFrame({
+            "사건": [f"{n:02d}. {title_map[n]}" for n in logs["case_no"]],
+            "내 판정": logs["my_judge"],
+            "정답 판정": [ans_map[n] for n in logs["case_no"]],
+            "내 특성": logs["my_tag"],
+            "정답 특성": [tag_map[n] for n in logs["case_no"]],
+            "점수": logs["score"],
+        })
+        st.markdown('<div class="panel"><h4>CASE LOG</h4></div>', unsafe_allow_html=True)
+        st.dataframe(view, use_container_width=True, hide_index=True)
 
-    st.divider()
-    st.markdown("### ✍️ 산출물 · 내가 만든 AI 정의 1문장")
-    st.caption("아래 빈칸을 채우면 문장이 자동으로 만들어져요. 마음에 들면 그대로, 아니면 직접 고쳐 쓰세요!")
-
-    c1, c2, c3, c4 = st.columns(4)
-    w1 = c1.text_input("👀 무엇을 인식해서", "사람의 말과 사진을")
-    w2 = c2.text_input("📚 무엇으로 배우고", "수많은 데이터로")
-    w3 = c3.text_input("🧠 무엇을 판단해서", "상황에 맞는 답을")
-    w4 = c4.text_input("🦾 무엇을 스스로 하는", "일을 대신 해 주는")
-    draft = f"AI는 {w1} 인식하고, {w2} 스스로 배워서, {w3} 추론하고, {w4} 기계(프로그램)이다."
-    st.info(f"자동 완성 문장 → {draft}")
-
-    sentence = st.text_area("나의 AI 정의 (1문장)", value=draft, height=90, key="my_def")
-    if st.button("💾 제출하고 반 게시판에 올리기", type="primary", use_container_width=True):
-        if len(sentence.strip()) < 10:
-            st.error("문장을 조금 더 길게 써 주세요!")
+    st.markdown('<div class="panel"><h4>FINAL STATEMENT &nbsp;-&nbsp; 내가 쓴 AI 정의 1문장</h4></div>',
+                unsafe_allow_html=True)
+    st.markdown('<div class="hint">예시 틀 : "AI란 ○○을 스스로 ○○해서 ○○하는 것이다."</div>',
+                unsafe_allow_html=True)
+    sent = st.text_area("AI란 무엇인가? (한 문장)", value=my_def(ss.cls, ss.num),
+                        height=90, max_chars=200, label_visibility="collapsed")
+    cA, cB = st.columns([1, 1])
+    if cA.button("🖋 정의 제출 / 수정", type="primary"):
+        if len(sent.strip()) < 5:
+            st.error("조금 더 자세히 적어 주세요. (5자 이상)")
         else:
-            save_definition(ss.room, ss.nickname, sentence.strip(), ss.score)
-            ss.saved_def = True
-            st.success("제출 완료! 반 전체 현황에서 친구들 문장도 볼 수 있어요.")
+            save_def(ss.cls, ss.num, ss.name, sent.strip())
+            st.success("정의가 상황실 게시판에 등록되었습니다.")
 
-    report = (
-        f"[AI 탐정소 개인 점수 기록]\n"
-        f"반: {ss.room}\n이름: {ss.nickname}\n"
-        f"날짜: {datetime.now():%Y-%m-%d %H:%M}\n"
-        f"총점: {ss.score:.1f} / {done * 20}  ({ratio * 100:.0f}%)\n"
-        f"계급: {rname}\n"
-        f"판정 정답: {int(df['judge_ok'].sum())}/{done}  |  태깅 정확도: {df['tag_match'].mean() / 4 * 100:.0f}%\n"
-        f"나의 AI 정의: {sentence.strip()}\n\n"
-        + view.to_string(index=False)
-    )
-    st.download_button("⬇️ 내 점수 기록 내려받기 (txt)", report.encode("utf-8"),
-                       file_name=f"AI탐정소_{ss.room}_{ss.nickname}.txt",
-                       use_container_width=True)
-
-    st.write("")
-    if st.button("🔄 처음부터 다시 수사하기", use_container_width=True):
-        for c in CASES:
-            for k in TRAIT_KEYS:
-                st.session_state.pop(f"tag_{c['id']}_{k}", None)
-        reset_game()
-        ss.page = "사건 수사"
-        st.rerun()
-
+    report = (f"AI 탐정소 수사 보고서 (CASE 4-1-1)\n"
+              f"{'='*44}\n소속: {ss.cls} {ss.num}\n이름: {ss.name}\n"
+              f"계급: {rank}\n총점: {total} / {TOTAL_MAX}\n"
+              f"종결 사건: {len(logs)} / {len(CASES)}\n"
+              f"판정 정답 {jok}건, 특성 정답 {tok}건\n"
+              f"{'-'*44}\n[내가 쓴 AI 정의]\n{sent.strip() or '(미작성)'}\n")
+    cB.download_button("⬇ 보고서 내려받기 (txt)", report.encode("utf-8"),
+                       file_name=f"AI탐정보고서_{ss.cls}_{ss.num}_{ss.name}.txt", mime="text/plain")
 
 # ----------------------------------------------------------------------------
-# 4) 반 전체 현황 (실시간 집계)
+# 4. 상황실
 # ----------------------------------------------------------------------------
-def render_board(room):
-    df = load_responses(room)
-    if df.empty:
-        st.info("아직 제출된 기록이 없어요. 친구들이 수사를 시작하면 여기에 실시간으로 쌓입니다!")
-        return
+elif ss.page == "상황실 (반 전체)":
+    target = st.selectbox("상황실 모니터링 대상", CLASS_LIST,
+                          index=CLASS_LIST.index(ss.cls) if ss.registered else 0)
+    auto = st.checkbox("5초마다 자동 갱신", value=True)
 
-    n_students = df["nickname"].nunique()
-    acc = df["judge_ok"].mean() * 100
-    tag_acc = df["tag_match"].mean() / 4 * 100
+    def situation_room():
+        df = class_logs(target)
+        if not len(df):
+            st.info("아직 접수된 수사 보고서가 없습니다.")
+            return
+        people = df[["num", "name"]].drop_duplicates()
+        acc_j = df["judge_ok"].mean() * 100
+        acc_t = df["tag_ok"].mean() * 100
+        m = st.columns(4)
+        vals = [("AGENTS", f"{len(people)}", "참여 탐정 수"),
+                ("REPORTS", f"{len(df)}", "접수된 보고서"),
+                ("JUDGE ACC.", f"{acc_j:.0f}%", "AI 여부 정답률"),
+                ("TAG ACC.", f"{acc_t:.0f}%", "특성 지목 정답률")]
+        for col, (l, v, s) in zip(m, vals):
+            col.markdown(f'<div class="metric"><div class="l">{l}</div><div class="v">{v}</div>'
+                         f'<div class="s">{s}</div></div>', unsafe_allow_html=True)
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("참여 탐정", f"{n_students} 명")
-    c2.metric("총 제출 수", f"{len(df)} 건")
-    c3.metric("반 평균 판정 정답률", f"{acc:.1f} %")
-    c4.metric("반 평균 태깅 정확도", f"{tag_acc:.1f} %")
-    st.caption(f"마지막 갱신 {datetime.now():%H:%M:%S} · 5초마다 자동 새로고침")
+        t1, t2, t3 = st.tabs(["사건별 정답률", "명예의 전당", "우리 반 AI 정의"])
 
-    t1, t2, t3, t4 = st.tabs(["📊 사건별 정답률", "🏆 명예의 전당", "🏷️ 특성별 정확도", "✍️ 우리 반 AI 정의"])
+        with t1:
+            g = df.groupby("case_no").agg(n=("score", "size"),
+                                          j=("judge_ok", "mean"), t=("tag_ok", "mean")).reset_index()
+            tmap = {c["no"]: c["title"] for c in CASES}
+            rows = []
+            for _, r in g.iterrows():
+                pj, pt = r["j"] * 100, r["t"] * 100
+                bar = int(round(pj / 5))
+                rows.append(
+                    f'<div class="kv"><span>{int(r["case_no"]):02d}. {tmap[int(r["case_no"])]} '
+                    f'<span style="color:#6a5f4c;">({int(r["n"])}명)</span></span>'
+                    f'<span><span style="font-family:Special Elite,monospace;color:'
+                    f'{"#5fbf71" if pj>=70 else "#c9483d" if pj<40 else "#d6a84a"};">'
+                    f'{"■"*bar}{"□"*(20-bar)}</span> &nbsp;판정 {pj:.0f}% / 특성 {pt:.0f}%</span></div>')
+            st.markdown('<div class="panel"><h4>CASE DIFFICULTY</h4>' + "".join(rows) + '</div>',
+                        unsafe_allow_html=True)
+            hard = g.sort_values("j").head(3)
+            st.markdown('<div class="panel"><h4>가장 많이 틀린 사건 TOP 3</h4>' +
+                        "".join(f'<div class="kv"><span>{int(r["case_no"]):02d}. {tmap[int(r["case_no"])]}</span>'
+                                f'<span class="ng">정답률 {r["j"]*100:.0f}%</span></div>'
+                                for _, r in hard.iterrows()) + '</div>', unsafe_allow_html=True)
 
-    with t1:
-        g = (df.groupby("case_id")
-               .agg(정답률=("judge_ok", "mean"), 제출수=("judge_ok", "size"),
-                    태깅정확도=("tag_match", "mean"))
-               .reset_index())
-        g["사건"] = g["case_id"].map(lambda i: f"{i:02d}. {CASE_BY_ID[i]['title']}")
-        g["정답률"] = (g["정답률"] * 100).round(1)
-        g["태깅정확도"] = (g["태깅정확도"] / 4 * 100).round(1)
-        g["유형"] = g["case_id"].map(lambda i: "AI" if CASE_BY_ID[i]["is_ai"] else "AI 아님")
-        st.bar_chart(g.set_index("사건")[["정답률"]], height=320)
-        hard = g.sort_values("정답률").head(3)
-        st.warning("가장 많이 틀린 사건 TOP 3 → " +
-                   " / ".join(f"{r['사건']} ({r['정답률']}%)" for _, r in hard.iterrows()))
-        st.dataframe(g[["사건", "유형", "제출수", "정답률", "태깅정확도"]],
-                     use_container_width=True, hide_index=True)
+        with t2:
+            board = (df.groupby(["num", "name"])
+                       .agg(점수=("score", "sum"), 종결=("score", "size")).reset_index()
+                       .sort_values(["점수", "종결"], ascending=False).head(10))
+            rows = []
+            for i, (_, r) in enumerate(board.iterrows(), start=1):
+                medal = ["①", "②", "③"][i-1] if i <= 3 else f"{i}"
+                rk, _d = get_rank(int(r["점수"]))
+                rows.append(f'<div class="kv"><span>{medal} &nbsp;{r["num"]} {r["name"]} '
+                            f'<span class="tagchip">{rk}</span></span>'
+                            f'<span>{int(r["점수"])}점 · {int(r["종결"])}건</span></div>')
+            st.markdown('<div class="panel"><h4>HALL OF FAME</h4>' + "".join(rows) + '</div>',
+                        unsafe_allow_html=True)
 
-    with t2:
-        rank = (df.groupby("nickname")
-                  .agg(점수=("score", "sum"), 푼문항=("case_id", "nunique"),
-                       판정정답=("judge_ok", "sum"))
-                  .reset_index()
-                  .sort_values("점수", ascending=False))
-        rank["점수"] = rank["점수"].round(1)
-        rank.insert(0, "순위", ["🥇", "🥈", "🥉"][:len(rank)] + list(range(4, len(rank) + 1)))
-        rank.columns = ["순위", "탐정", "점수", "푼 사건", "판정 정답 수"]
-        st.dataframe(rank, use_container_width=True, hide_index=True)
+            tag_ans = {c["no"]: (c["tag"] if c["is_ai"] else "없음") for c in CASES}
+            df2 = df.copy()
+            df2["정답특성"] = df2["case_no"].map(tag_ans)
+            tg = df2.groupby("정답특성")["tag_ok"].mean() * 100
+            label = {"인식": "인식", "학습": "학습", "추론": "추론", "행동": "행동", "없음": "AI 아님(규칙)"}
+            rows = [f'<div class="kv"><span>{label.get(k,k)}</span>'
+                    f'<span class="{"ok" if v>=70 else "ng" if v<40 else ""}">{v:.0f}%</span></div>'
+                    for k, v in tg.items()]
+            st.markdown('<div class="panel"><h4>특성별 지목 정확도</h4>' + "".join(rows) + '</div>',
+                        unsafe_allow_html=True)
 
-    with t3:
-        rows = []
-        for k in TRAIT_KEYS:
-            hit = tot = 0
-            for _, r in df.iterrows():
-                ans = k in CASE_BY_ID[int(r["case_id"])]["tags"]
-                mine = k in (r["picked"].split(",") if r["picked"] else [])
-                hit += int(ans == mine)
-                tot += 1
-            rows.append({"특성": f"{TRAITS[k]['emoji']} {k}",
-                         "정확도": round(hit / tot * 100, 1) if tot else 0.0})
-        tdf = pd.DataFrame(rows)
-        st.bar_chart(tdf.set_index("특성"), height=260)
-        low = tdf.sort_values("정확도").iloc[0]
-        st.info(f"우리 반이 가장 어려워하는 특성은 {low['특성']} ({low['정확도']}%) 입니다. "
-                f"이 특성을 함께 다시 정리해 봐요!")
+        with t3:
+            dd = class_defs(target)
+            if not len(dd):
+                st.info("아직 제출된 AI 정의가 없습니다.")
+            else:
+                for _, r in dd.iterrows():
+                    st.markdown('<div class="paper" style="padding:16px 20px;margin-bottom:10px;">'
+                                f'<div class="caseno" style="margin-bottom:8px;">{r["num"]} {r["name"]}</div>'
+                                f'<div style="font-family:Gaegu,cursive;font-size:21px;color:#2a2118;">'
+                                f'&ldquo; {r["sentence"]} &rdquo;</div></div>', unsafe_allow_html=True)
 
-    with t4:
-        ddf = load_definitions(room)
-        if ddf.empty:
-            st.info("아직 제출된 AI 정의가 없어요.")
-        else:
-            st.caption(f"총 {len(ddf)}명 제출")
-            for _, r in ddf.iterrows():
-                st.markdown(f"""<div class="trait-box" style="min-height:0; margin-bottom:8px">
-                <b>🕵️ {r['nickname']}</b> <span class="small">({r['total']:.0f}점)</span><br>
-                <span style="font-size:15px">“{r['sentence']}”</span></div>""",
-                            unsafe_allow_html=True)
-            st.download_button("⬇️ 우리 반 AI 정의 모음 내려받기 (csv)",
-                               ddf[["nickname", "sentence", "total", "ts"]]
-                               .to_csv(index=False).encode("utf-8-sig"),
-                               file_name=f"AI정의_{room}.csv", use_container_width=True)
-
-
-def page_class():
-    st.markdown("### 🏫 우리 반 실시간 현황판")
-    room = st.text_input("볼 반 이름", value=ss.room, key="board_room")
-    live = st.toggle("🔴 실시간 자동 갱신", value=True)
-    if live and hasattr(st, "fragment"):
-        st.fragment(run_every=5)(render_board)(room)
-    else:
-        if st.button("🔄 새로고침", use_container_width=True):
-            st.rerun()
-        render_board(room)
-
+    runner = situation_room
+    if auto and hasattr(st, "fragment"):
+        runner = st.fragment(run_every=5)(situation_room)
+    runner()
 
 # ----------------------------------------------------------------------------
-# 5) AI 특성 사전
+# 5. AI 특성 사전
 # ----------------------------------------------------------------------------
-def page_dict():
-    st.markdown("### 📖 AI 특성 사전 · AI는 사람의 어떤 능력을 흉내 낼까?")
-    st.markdown("사람은 보고(인식) → 배우고(학습) → 생각하고(추론) → 행동한다. "
-                "AI는 바로 이 네 단계를 기계로 흉내 냅니다.")
-    for k in TRAIT_KEYS:
-        t = TRAITS[k]
-        with st.expander(f"{t['emoji']} {k} — {t['short']}", expanded=True):
-            st.markdown(f"- 뜻: {t['ex']}")
-            samples = [c for c in CASES if k in c["tags"]][:4]
-            st.markdown("- 이런 사례에 있어요: " +
-                        ", ".join(f"{c['emoji']} {c['title']}" for c in samples))
-    st.divider()
-    st.markdown("""
-    #### 🧭 AI와 '그냥 기계' 구별 기준
-    | 질문 | AI | 그냥 기계(센서·규칙) |
-    |---|---|---|
-    | 쓸수록 똑똑해지나요? | ⭕ 데이터로 학습 | ❌ 늘 그대로 |
-    | 상황마다 다르게 판단하나요? | ⭕ 추론 | ❌ 정해진 규칙만 |
-    | 정답을 사람이 다 정해 줬나요? | ❌ 스스로 규칙 발견 | ⭕ 사람이 전부 입력 |
-
-    👉 한 줄 정리: 인식 + 행동만 있으면 센서 기계, 여기에 학습 + 추론이 더해지면 AI!
-    """)
-    with st.expander("🗂️ 사건 파일 20장 정답표 (선생님/복습용)"):
-        tb = pd.DataFrame([{
-            "번호": c["id"], "사건": f"{c['emoji']} {c['title']}",
-            "정답": "🤖 AI" if c["is_ai"] else "⚙️ AI 아님",
-            "특성 태그": ", ".join(c["tags"]) or "없음",
-        } for c in CASES])
-        st.dataframe(tb, use_container_width=True, hide_index=True)
-
-
-# ----------------------------------------------------------------------------
-# 라우팅
-# ----------------------------------------------------------------------------
-if ss.page == "입장":
-    page_enter()
-elif ss.page == "사건 수사":
-    page_quiz()
-elif ss.page == "내 수사 결과":
-    page_result()
-elif ss.page == "반 전체 현황":
-    page_class()
 else:
-    page_dict()
+    paper('<div class="caseno">REFERENCE BOOK &nbsp;|&nbsp; 4대 특성 판별 지침</div>'
+          '<div class="secret">MANUAL</div><h2>AI 특성 사전</h2>'
+          '<div class="evidence-box">AI는 사람의 능력을 흉내 낸다. '
+          '<b>보고 듣고(인식) → 배우고(학습) → 판단하고(추론) → 움직인다(행동)</b></div>')
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    rows = [("인식", "사람의 눈·귀", "사진·소리·글을 받아들여 무엇인지 알아차린다", "얼굴로 잠금 해제, 음성 비서"),
+            ("학습", "사람의 공부", "많은 데이터를 보며 스스로 성능을 높인다", "추천 영상, 스팸 분류"),
+            ("추론", "사람의 생각", "배운 것을 근거로 판단·예측하고 새 답을 만든다", "바둑 다음 수, 질병 가능성"),
+            ("행동", "사람의 손발", "판단한 결과를 실제 동작으로 실행한다", "자율주행, 로봇청소기")]
+    for t, b, d, e in rows:
+        st.markdown(f'<div class="panel"><h4>{t} &nbsp;|&nbsp; {b}</h4>'
+                    f'<div style="font-size:16px;color:#e6dcc6;">{d}</div>'
+                    f'<div style="font-size:13px;color:#9c8e75;margin-top:6px;">'
+                    f'<span class="tagchip">사례</span>{e}</div></div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="panel"><h4>헷갈릴 때 쓰는 판별 3문</h4>'
+                '<div class="kv"><span>① 스스로 배워서 어제보다 나아지는가?</span><span>예 → AI 쪽</span></div>'
+                '<div class="kv"><span>② 처음 보는 상황에서도 판단하는가?</span><span>예 → AI 쪽</span></div>'
+                '<div class="kv"><span>③ 10년째 똑같은 규칙만 반복하는가?</span><span>예 → AI 아님</span></div>'
+                '</div>', unsafe_allow_html=True)
+
+    with st.expander("👮 정답표 (선생님용)"):
+        ans = pd.DataFrame([{"No": c["no"], "사건": c["title"],
+                             "판정": "AI다" if c["is_ai"] else "AI 아님",
+                             "정답 특성": c["tag"] if c["is_ai"] else "해당 없음"} for c in CASES])
+        st.dataframe(ans, use_container_width=True, hide_index=True)
