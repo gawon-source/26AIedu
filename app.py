@@ -550,6 +550,7 @@ def page_investigate():
         if nxt:
             if st.button(f"➡️ 다음 사건 ({nxt[0]:02d}번) 수사", key=f"next_{case['no']}"):
                 ss.cur_case = nxt[0]
+                st.rerun()  
                 ss.just_submitted = None
                 st.rerun()
         else:
