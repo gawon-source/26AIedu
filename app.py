@@ -550,7 +550,6 @@ def page_investigate():
         if nxt:
             if st.button(f"➡️ 다음 사건 ({nxt[0]:02d}번) 수사", key=f"next_{case['no']}"):
                 ss.case_idx = nxt[0] - 1       # 번호 → 순서로 변환
-                ss["case_pick"] = nxt[0] - 1
                 st.rerun()
             else:
                 st.success("20건 전부 수사 종결. '내 수사 보고서'에서 최종 결과를 확인하라.")
