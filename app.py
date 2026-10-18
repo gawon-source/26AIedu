@@ -549,9 +549,8 @@ def page_investigate():
         nxt = [c2["no"] for c2 in CASES if c2["no"] not in my_records]
         if nxt:
             if st.button(f"➡️ 다음 사건 ({nxt[0]:02d}번) 수사", key=f"next_{case['no']}"):
-                ss.cur_case = nxt[0]
-                st.rerun()  
-                ss.just_submitted = None
+                ss.case_idx = nxt
+                ss["case_pick"] = nxt      # ← 선택 위젯의 key 이름에 맞춰 함께 변경
                 st.rerun()
         else:
             st.success("20건 전부 수사 종결. '내 수사 보고서'에서 최종 결과를 확인하라.")
