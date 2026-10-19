@@ -3,6 +3,8 @@
 # 실행: streamlit run app.py
 
 import os
+import io
+import csv
 import sqlite3
 import datetime
 import streamlit as st
@@ -10,10 +12,11 @@ import streamlit as st
 # =====================================================================
 # 0. 기본 설정 (ss 를 쓰지 않는 영역)
 # =====================================================================
-TEACHER_PIN = "208324"
+TEACHER_PIN = "1234"
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ai_detective.db")
 
 PAGES = ["사건 브리핑", "수사실 (20건)", "내 수사 보고서", "상황실 (반 전체)", "AI 특성 사전"]
+DASH_VIEWS = ["사건별 정답률", "명예의 전당", "우리 반 AI 정의"]
 
 CLASS_OPTIONS = [f"{i}반" for i in range(1, 11)]
 NUM_OPTIONS = [f"{i}번" for i in range(1, 36)]
@@ -98,6 +101,9 @@ CASES = [
          why="무언가 가까이 있는지만 감지한다. 그것이 손인지 구별하지 못하므로 AI가 아니다."),
 ]
 
+CASE_NOS = [c["no"] for c in CASES]
+CASE_BY_NO = {c["no"]: c for c in CASES}
+
 RANKS = [
     (400, "AI 마스터 탐정", "사건을 완벽하게 꿰뚫어 보았다"),
     (360, "명탐정", "AI의 정체를 거의 다 밝혀냈다"),
@@ -109,9 +115,9 @@ RANKS = [
 
 
 def get_rank(score):
-    for line, name, desc in RANKS:
+    for line, name_, desc in RANKS:
         if score >= line:
-            return name, desc
+            return name_, desc
     return RANKS[-1][1], RANKS[-1][2]
 
 
@@ -215,34 +221,11 @@ def load_class_definitions(cls):
 
 
 def reset_class(cls):
-    """해당 반의 기록과 정의를 삭제한다. 표/열이 없어도 오류를 내지 않는다."""
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    try:
-        deleted = 0
-        for table in ("records", "definitions"):
-            found = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-                (table,),
-            ).fetchone()
-            if not found:
-                continue
-
-            cols = [row[1] for row in conn.execute(f"PRAGMA table_info({table})")]
-            key = None
-            for cand in ("cls", "class_name", "cls_name", "ban", "classroom"):
-                if cand in cols:
-                    key = cand
-                    break
-            if key is None:
-                continue
-
-            cur = conn.execute(f"DELETE FROM {table} WHERE {key}=?", (str(cls),))
-            deleted += cur.rowcount
-        conn.commit()
-        return deleted
-    finally:
-        conn.close()
-
+    conn = db_conn()
+    conn.execute("DELETE FROM records WHERE cls=?", (cls,))
+    conn.execute("DELETE FROM definitions WHERE cls=?", (cls,))
+    conn.commit()
+    conn.close()
 
 
 # =====================================================================
@@ -291,7 +274,7 @@ html, body, [class*="css"] { font-family: 'Nanum Myeongjo', serif; }
 .dossier::after {
   content:"No."; position:absolute; top:14px; right:26px;
   font-family:'Special Elite', cursive; font-size:11px; color:#6b573a;
-  }
+}
 .stamp-secret {
   display:inline-block; font-family:'Special Elite', cursive; font-size:19px;
   letter-spacing:3px; color:#9e1f1f; border-bottom:2px solid #9e1f1f;
@@ -324,10 +307,6 @@ html, body, [class*="css"] { font-family: 'Nanum Myeongjo', serif; }
 }
 .memo {
   font-family:'Gaegu', cursive; font-size:17px; color:#2b2318; line-height:1.7;
-}
-.tag {
-  display:inline-block; font-family:'Special Elite', cursive; font-size:12px;
-  border:1px solid #6b573a; color:#4a3a25; padding:2px 9px; margin:2px 4px 2px 0;
 }
 .verdict-ok { color:#1d6b3a; font-weight:800; }
 .verdict-no { color:#9e1f1f; font-weight:800; }
@@ -368,7 +347,10 @@ div[data-baseweb="select"] > div, .stTextInput input, .stTextArea textarea {
 .stButton > button:hover, .stDownloadButton > button:hover {
   background:#9e1f1f; color:#fff6e4; border:1px solid #9e1f1f;
 }
-div[role="radiogroup"] label { color:#241c12 !important; font-size:16px; }
+/* 라디오 선택지는 어두운 배경 위에 있으므로 밝은 글씨 */
+div[role="radiogroup"] label, div[role="radiogroup"] label p {
+  color:#e8ddc6 !important; font-size:16px;
+}
 .stProgress > div > div > div > div { background:#9e1f1f; }
 hr { border-color:#4a3a25; }
 div[data-testid="stExpander"] {
@@ -386,10 +368,8 @@ db_init()
 # =====================================================================
 ss = st.session_state
 ss.page = safe_page(ss.get("page"))
-if "cur_case" not in ss:
-    ss.cur_case = 1
-if "just_submitted" not in ss:
-    ss.just_submitted = None
+if "sb_page" not in ss or ss.get("sb_page") not in PAGES:
+    ss["sb_page"] = ss.page
 
 # =====================================================================
 # 4. 사이드바 - 탐정 등록
@@ -398,18 +378,18 @@ with st.sidebar:
     st.markdown("### 🕵️ DETECTIVE ID")
     st.caption("수사증을 발급받아야 입장할 수 있다.")
     cls = st.selectbox("소속 (반)", CLASS_OPTIONS, key="sb_cls")
-    num = st.selectbox("번호", NUM_OPTIONS, key="sb_num")
+    num = st.selectbox("요원 번호", NUM_OPTIONS, key="sb_num")
     name = st.text_input("탐정 이름", max_chars=12, placeholder="예) 김민준",
                          key="sb_name").strip()
 
     registered = bool(name)
     if registered:
-        st.success(f"수사증 발급 완료\\n\\n{cls} {num} · {name} 탐정")
+        st.success("수사증 발급 완료\n\n" + f"{cls} {num} · {name} 탐정")
     else:
         st.warning("탐정 이름을 입력하면 수사실이 열린다.")
 
     st.markdown("---")
-    page = st.radio("수사 메뉴", PAGES, index=PAGES.index(ss.page), key="sb_page")
+    page = st.radio("수사 메뉴", PAGES, key="sb_page")
     ss.page = page
 
     st.markdown("---")
@@ -418,10 +398,9 @@ with st.sidebar:
         if pin == TEACHER_PIN:
             st.caption("인증되었다.")
             target = st.selectbox("초기화할 반", CLASS_OPTIONS, key="sb_reset_cls")
-            if st.button("이 반 기록 초기화"):
-               n = reset_class(target)
-               st.success(f"{target} 기록 {n}건을 삭제했다.")
-               st.rerun()
+            if st.button("이 반 기록 전체 삭제", key="btn_reset"):
+                reset_class(target)
+                st.success(f"{target} 기록을 삭제했다.")
         elif pin:
             st.error("PIN이 올바르지 않다.")
 
@@ -462,7 +441,7 @@ def page_briefing():
     icons = {"인식": "👁️", "학습": "📚", "추론": "🧠", "행동": "🦾"}
     for col, t in zip(cols, TRAITS):
         col.markdown(
-            f"<div class='dossier' style='padding:18px'>"
+            "<div class='dossier' style='padding:18px'>"
             f"<div style='font-size:26px'>{icons[t]}</div>"
             f"<div class='case-title' style='font-size:22px;margin:6px 0'>{t}</div>"
             f"<div class='memo'>{TRAIT_DESC[t]}</div></div>",
@@ -490,26 +469,31 @@ def page_briefing():
 # =====================================================================
 # 7. 페이지 : 수사실
 # =====================================================================
+def case_label(n):
+    mark = "✔" if n in my_records else "□"
+    return f"{mark} {n:02d}. {CASE_BY_NO[n]['title']}"
+
+
 def page_investigate():
     if not registered:
         st.error("사이드바에서 반 · 번호 · 이름을 등록해야 수사실에 들어갈 수 있다.")
         return
 
-    # 아직 풀지 않은 첫 사건으로 자동 이동
-    if ss.just_submitted is None:
-        unsolved = [c["no"] for c in CASES if c["no"] not in my_records]
-        if unsolved and ss.cur_case in my_records:
-            ss.cur_case = unsolved[0]
+    # (1) 최초 입장 : 아직 수사하지 않은 첫 사건을 자동 선택
+    if ss.get("case_pick") not in CASE_NOS:
+        unsolved = [n for n in CASE_NOS if n not in my_records]
+        ss["case_pick"] = unsolved[0] if unsolved else CASE_NOS[0]
 
-    labels = []
-    for c in CASES:
-        mark = "✔" if c["no"] in my_records else "□"
-        labels.append(f"{mark} {c['no']:02d}. {c['title']}")
+    # (2) '다음 사건' 버튼 처리 : 위젯이 만들어지기 전에만 값을 바꿀 수 있다
+    goto = ss.get("goto_case")
+    if goto is not None:
+        ss["goto_case"] = None
+        if goto in CASE_NOS:
+            ss["case_pick"] = goto
 
-    idx = next((i for i, c in enumerate(CASES) if c["no"] == ss.cur_case), 0)
-    pick = st.selectbox("사건 파일 선택", labels, index=idx, key="case_pick")
-    ss.cur_case = CASES[labels.index(pick)]["no"]
-    case = CASES[labels.index(pick)]
+    sel_no = st.selectbox("사건 파일 선택", CASE_NOS,
+                          format_func=case_label, key="case_pick")
+    case = CASE_BY_NO[sel_no]
 
     st.progress(solved / len(CASES), text=f"수사 진행 {solved} / {len(CASES)}건")
 
@@ -541,7 +525,6 @@ def page_investigate():
             trait_ok = (trait == case["trait"])
             score = (JUDGE_POINT if judge_ok else 0) + (TRAIT_POINT if trait_ok else 0)
             save_record(cls, num, name, case["no"], j, trait, judge_ok, trait_ok, score)
-            ss.just_submitted = case["no"]
             st.rerun()
     else:
         r = my_records[case["no"]]
@@ -570,13 +553,14 @@ def page_investigate():
             "<div class='dossier'><div class='case-label'>수사 기록 · 사건의 진상</div>"
             f"<div class='memo'>{case['why']}</div></div>", unsafe_allow_html=True)
 
-        nxt = [c2["no"] for c2 in CASES if c2["no"] not in my_records]
-        if nxt:
-            if st.button(f"➡️ 다음 사건 ({nxt[0]:02d}번) 수사", key=f"next_{case['no']}"):
-                ss.case_idx = nxt[0] - 1       # 번호 → 순서로 변환
+        remaining = [n for n in CASE_NOS if n not in my_records]
+        if remaining:
+            nxt = remaining[0]
+            if st.button(f"➡️ 다음 사건 ({nxt:02d}번) 수사", key=f"next_{case['no']}"):
+                ss["goto_case"] = nxt
                 st.rerun()
-            else:
-                st.success("20건 전부 수사 종결. '내 수사 보고서'에서 최종 결과를 확인하라.")
+        else:
+            st.success("20건 전부 수사 종결. '내 수사 보고서'에서 최종 결과를 확인하라.")
 
 
 # =====================================================================
@@ -607,10 +591,10 @@ def page_report():
                f"<div class='val'>{solved}</div><div class='sub'>/ 20건</div></div>",
                unsafe_allow_html=True)
     c.markdown("<div class='scorebox'><div class='lbl'>판정 적중</div>"
-               f"<div class='val'>{judge_hit}</div><div class='sub'>/ {max(solved,1)}건</div></div>",
+               f"<div class='val'>{judge_hit}</div><div class='sub'>/ {max(solved, 1)}건</div></div>",
                unsafe_allow_html=True)
     d.markdown("<div class='scorebox'><div class='lbl'>특성 적중</div>"
-               f"<div class='val'>{trait_hit}</div><div class='sub'>/ {max(solved,1)}건</div></div>",
+               f"<div class='val'>{trait_hit}</div><div class='sub'>/ {max(solved, 1)}건</div></div>",
                unsafe_allow_html=True)
 
     st.markdown("#### 사건별 기록")
@@ -647,7 +631,7 @@ def page_report():
         else:
             st.error("한 문장을 입력하라.")
 
-    report = [f"AI 탐정소 수사 보고서 (사건 4-1-1)",
+    report = ["AI 탐정소 수사 보고서 (사건 4-1-1)",
               f"소속 : {cls} {num}   탐정 : {name}",
               f"총점 : {total_score} / 400점   계급 : {rank}",
               f"수사 종결 : {solved}/20건  (판정 적중 {judge_hit}, 특성 적중 {trait_hit})",
@@ -657,7 +641,7 @@ def page_report():
                       f"(정답 {r['정답 특성']}) {r['특성']} | {r['점수']}점")
     report.append("-" * 52)
     report.append(f"내가 쓴 AI 정의 : {sentence.strip() or '(미작성)'}")
-    st.download_button("⬇️ 보고서 파일로 내려받기", "\\n".join(report),
+    st.download_button("⬇️ 보고서 파일로 내려받기", "\n".join(report),
                        file_name=f"AI탐정소_{cls}_{num}_{name}.txt",
                        mime="text/plain", key="btn_dl")
 
@@ -673,8 +657,7 @@ def render_dashboard():
 
     people = {}
     for rc, rn, rname, cno, jok, tok, sc in rows:
-        key = (rc, rn)
-        p = people.setdefault(key, dict(name=rname, score=0, cnt=0))
+        p = people.setdefault((rc, rn), dict(name=rname, score=0, cnt=0))
         p["score"] += sc
         p["cnt"] += 1
         p["name"] = rname
@@ -697,9 +680,10 @@ def render_dashboard():
                f"<div class='val'>{trait_rate:.0f}%</div><div class='sub'>4대 특성 지목</div></div>",
                unsafe_allow_html=True)
 
-    t1, t2, t3 = st.tabs(["사건별 정답률", "명예의 전당", "우리 반 AI 정의"])
+    view = st.radio("보기", DASH_VIEWS, horizontal=True,
+                    label_visibility="collapsed", key="dash_view")
 
-    with t1:
+    if view == DASH_VIEWS[0]:
         stat = {}
         for rc, rn, rname, cno, jok, tok, sc in rows:
             s = stat.setdefault(cno, dict(n=0, j=0, t=0))
@@ -725,17 +709,17 @@ def render_dashboard():
             for h in hard:
                 st.markdown(f"- {h['사건']} · 판정 정답률 {h['판정 정답률(%)']}%")
 
-    with t2:
+    elif view == DASH_VIEWS[1]:
         board = sorted(people.items(), key=lambda kv: (-kv[1]["score"], kv[1]["name"]))
         lead = []
         for i, ((rc, rn), p) in enumerate(board[:20], start=1):
-            medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"{i}")
+            medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, str(i))
             lead.append({"순위": medal, "번호": rn, "탐정": p["name"],
                          "점수": p["score"], "수사 건수": p["cnt"],
                          "계급": get_rank(p["score"])[0]})
         st.dataframe(lead, use_container_width=True, hide_index=True)
 
-    with t3:
+    else:
         defs = load_class_definitions(cls)
         if not defs:
             st.info("아직 제출된 정의가 없다.")
@@ -746,11 +730,21 @@ def render_dashboard():
                     f"<div class='case-label'>{dn} {dname} 탐정</div>"
                     f"<div class='memo'>“{dsent}”</div></div>",
                     unsafe_allow_html=True)
-            csv = "번호,이름,AI 정의\\n" + "\\n".join(
-                f"{dn},{dname},\"{dsent}\"" for dn, dname, dsent in defs)
-            st.download_button("⬇️ 우리 반 정의 모음 내려받기", csv,
+            buf = io.StringIO()
+            writer = csv.writer(buf)
+            writer.writerow(["번호", "이름", "AI 정의"])
+            for dn, dname, dsent in defs:
+                writer.writerow([dn, dname, dsent])
+            st.download_button("⬇️ 우리 반 정의 모음 내려받기",
+                               "\ufeff" + buf.getvalue(),
                                file_name=f"AI정의_{cls}.csv", mime="text/csv",
                                key="btn_dl_def")
+
+
+if hasattr(st, "fragment"):
+    dashboard_live = st.fragment(run_every=5)(render_dashboard)
+else:
+    dashboard_live = None
 
 
 def page_dashboard():
@@ -762,9 +756,8 @@ def page_dashboard():
         "</div>", unsafe_allow_html=True)
 
     auto = st.toggle("5초마다 자동 갱신", value=True, key="auto_refresh")
-    if auto and hasattr(st, "fragment"):
-        frag = st.fragment(run_every=5)(render_dashboard)
-        frag()
+    if auto and dashboard_live is not None:
+        dashboard_live()
     else:
         if st.button("🔄 지금 갱신", key="btn_refresh"):
             st.rerun()
